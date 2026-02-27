@@ -3,6 +3,9 @@
   publish = "dist"
   functions = "netlify/functions"
 
+[build.environment]
+  SECRETS_SCAN_OMIT_KEYS = "PUBLIC_CLERK_PUBLISHABLE_KEY,PUBLIC_STRIPE_PUBLISHABLE_KEY,APP_URL,STRIPE_PRICE_BLUEPRINT,STRIPE_PRICE_BASIC,STRIPE_PRICE_PLUS,STRIPE_PRICE_ULTRA"
+
 [functions]
   node_bundler = "esbuild"
 
