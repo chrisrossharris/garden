@@ -6,9 +6,6 @@
 [functions]
   node_bundler = "esbuild"
 
-[[plugins]]
-  package = "@netlify/plugin-scheduled-functions"
-
 [[scheduled.functions]]
   name = "send-reminders"
   cron = "0 13 * * *"
