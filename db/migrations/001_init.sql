@@ -1,9 +1,44 @@
-CREATE TYPE sun_exposure AS ENUM ('full_sun', 'part_sun', 'shade');
-CREATE TYPE task_status AS ENUM ('todo', 'done', 'snoozed');
-CREATE TYPE delivery_type AS ENUM ('in_app', 'email', 'push');
-CREATE TYPE event_type AS ENUM ('LAST_FROST', 'FIRST_FROST');
-CREATE TYPE purchase_kind AS ENUM ('BLUEPRINT');
-CREATE TYPE subscription_plan AS ENUM ('BASIC', 'PLUS', 'ULTRA');
+DO $$
+BEGIN
+  CREATE TYPE sun_exposure AS ENUM ('full_sun', 'part_sun', 'shade');
+EXCEPTION
+  WHEN duplicate_object THEN NULL;
+END $$;
+
+DO $$
+BEGIN
+  CREATE TYPE task_status AS ENUM ('todo', 'done', 'snoozed');
+EXCEPTION
+  WHEN duplicate_object THEN NULL;
+END $$;
+
+DO $$
+BEGIN
+  CREATE TYPE delivery_type AS ENUM ('in_app', 'email', 'push');
+EXCEPTION
+  WHEN duplicate_object THEN NULL;
+END $$;
+
+DO $$
+BEGIN
+  CREATE TYPE event_type AS ENUM ('LAST_FROST', 'FIRST_FROST');
+EXCEPTION
+  WHEN duplicate_object THEN NULL;
+END $$;
+
+DO $$
+BEGIN
+  CREATE TYPE purchase_kind AS ENUM ('BLUEPRINT');
+EXCEPTION
+  WHEN duplicate_object THEN NULL;
+END $$;
+
+DO $$
+BEGIN
+  CREATE TYPE subscription_plan AS ENUM ('BASIC', 'PLUS', 'ULTRA');
+EXCEPTION
+  WHEN duplicate_object THEN NULL;
+END $$;
 
 CREATE TABLE IF NOT EXISTS users (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),

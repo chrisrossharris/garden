@@ -1,4 +1,9 @@
-CREATE TYPE bed_zone AS ENUM ('border', 'center', 'trellis');
+DO $$
+BEGIN
+  CREATE TYPE bed_zone AS ENUM ('border', 'center', 'trellis');
+EXCEPTION
+  WHEN duplicate_object THEN NULL;
+END $$;
 
 CREATE TABLE IF NOT EXISTS garden_layout_allocations (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
