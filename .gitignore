@@ -1,2 +1,12 @@
+# Dependencies / build output
+node_modules
+dist
+.astro
+
+# Local env files (never commit secrets)
+.env
+.env.*
+!.env.example
+
 # Local Netlify folder
 .netlify
