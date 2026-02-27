@@ -1,0 +1,119 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: light;
+  --bg: #f4efe4;
+  --bg-elevated: #fbf7ee;
+  --surface: #fffaf0;
+  --surface-strong: #f0e8d9;
+  --text: #2f3b2f;
+  --text-muted: #5d6b59;
+  --text-soft: #7d8d78;
+  --border: #d8cebb;
+  --accent: #4f6a4a;
+  --accent-strong: #3f563a;
+  --accent-ink: #eef5e8;
+  --ring: rgba(79, 106, 74, 0.35);
+  --sand: #e8ddca;
+}
+
+:root[data-theme='dark'] {
+  color-scheme: dark;
+  --bg: #0b130f;
+  --bg-elevated: #101a14;
+  --surface: #152119;
+  --surface-strong: #1b2a21;
+  --text: #e7ecd8;
+  --text-muted: #b8c4af;
+  --text-soft: #98a890;
+  --border: #2a3a2f;
+  --accent: #7f9a66;
+  --accent-strong: #91ab77;
+  --accent-ink: #10170d;
+  --ring: rgba(127, 154, 102, 0.35);
+  --sand: #223127;
+}
+
+body {
+  @apply font-sans;
+  background: radial-gradient(1200px 700px at 85% -10%, var(--surface-strong), transparent 60%), var(--bg);
+  color: var(--text);
+}
+
+.card {
+  @apply rounded-xl p-5 shadow-sm;
+  border: 1px solid var(--border);
+  background: var(--surface);
+}
+
+.theme-header {
+  border-color: var(--border);
+  background: color-mix(in srgb, var(--bg-elevated) 86%, transparent);
+}
+
+.theme-brand {
+  color: var(--text);
+}
+
+.theme-link {
+  color: var(--text-muted);
+}
+
+.theme-link:hover {
+  color: var(--text);
+}
+
+.theme-toggle {
+  border: 1px solid var(--border);
+  color: var(--text);
+  background: var(--surface);
+}
+
+.theme-toggle:hover {
+  background: var(--surface-strong);
+}
+
+.btn-primary {
+  background: var(--accent);
+  color: var(--accent-ink);
+}
+
+.btn-primary:hover {
+  background: var(--accent-strong);
+}
+
+.hero-surface {
+  border: 1px solid var(--border);
+  background: linear-gradient(180deg, var(--bg-elevated), var(--sand));
+}
+
+.hero-pill {
+  border: 1px solid var(--border);
+  color: var(--text-soft);
+}
+
+.btn-outline {
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+}
+
+.btn-outline:hover {
+  color: var(--text);
+  background: var(--surface-strong);
+}
+
+@layer utilities {
+  .text-moss-600 { color: var(--text-soft) !important; }
+  .text-moss-700 { color: var(--text-muted) !important; }
+  .text-moss-800 { color: var(--text) !important; }
+  .text-moss-900 { color: var(--text) !important; }
+  .border-moss-100 { border-color: var(--border) !important; }
+  .border-moss-200 { border-color: var(--border) !important; }
+  .border-moss-300 { border-color: var(--border) !important; }
+  .border-moss-500 { border-color: var(--accent) !important; }
+  .bg-moss-700 { background-color: var(--accent) !important; }
+  .to-sand { --tw-gradient-to: var(--sand) var(--tw-gradient-to-position) !important; }
+  .from-white { --tw-gradient-from: var(--bg-elevated) var(--tw-gradient-from-position) !important; --tw-gradient-to: rgb(255 255 255 / 0) var(--tw-gradient-to-position) !important; --tw-gradient-stops: var(--tw-gradient-from), var(--tw-gradient-to) !important; }
+}

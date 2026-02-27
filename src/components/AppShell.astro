@@ -1,0 +1,15 @@
+---
+const { title } = Astro.props;
+---
+
+<div class="space-y-6">
+  <div class="flex flex-wrap items-center justify-between gap-3">
+    <h1 class="font-serif text-3xl text-moss-800">{title}</h1>
+    <div class="flex gap-2 text-sm">
+      <a href="/app" class="rounded-md border border-moss-200 px-3 py-1.5">Dashboard</a>
+      <a href="/app/library" class="rounded-md border border-moss-200 px-3 py-1.5">Library</a>
+      <a href="/app/settings" class="rounded-md border border-moss-200 px-3 py-1.5">Settings</a>
+    </div>
+  </div>
+  <slot />
+</div>

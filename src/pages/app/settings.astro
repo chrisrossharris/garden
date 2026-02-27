@@ -1,0 +1,133 @@
+---
+import BaseLayout from '@/layouts/BaseLayout.astro';
+import AppShell from '@/components/AppShell.astro';
+import { requireAppUser } from '@/lib/auth';
+import { getSubscription } from '@/lib/services/users';
+import { flagsFromPlan } from '@/lib/services/feature-gates';
+
+const appUser = await requireAppUser(Astro.locals);
+if (!appUser) return Astro.redirect('/');
+
+const sub = await getSubscription(appUser.id);
+const activePlan = sub?.plan ?? null;
+const flags = flagsFromPlan(activePlan as 'BASIC' | 'PLUS' | 'ULTRA' | null);
+const periodEnd = sub?.current_period_end
+  ? new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric', year: 'numeric' }).format(new Date(sub.current_period_end))
+  : null;
+---
+
+<BaseLayout title="Settings | Garden OS">
+  <AppShell title="Billing + Plan">
+    <section class="card">
+      <div class="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <p class="text-xs uppercase tracking-wide text-moss-600">Current Plan</p>
+          <p class="mt-1 text-2xl font-semibold text-moss-800">{activePlan ?? 'FREE'}</p>
+          <p class="mt-1 text-sm text-moss-700">
+            Status: <span class="font-medium capitalize">{sub?.status ?? 'none'}</span>
+            {periodEnd && <> · Renews {periodEnd}</>}
+          </p>
+        </div>
+        <div class="grid grid-cols-2 gap-2 text-xs">
+          <div class="rounded-md border border-moss-100 px-3 py-2">
+            <p class="text-moss-600">Reminders</p>
+            <p class="mt-1 font-semibold text-moss-800">{flags.reminders ? 'Enabled' : 'Locked'}</p>
+          </div>
+          <div class="rounded-md border border-moss-100 px-3 py-2">
+            <p class="text-moss-600">Ultra Insights</p>
+            <p class="mt-1 font-semibold text-moss-800">{flags.ultraInsights ? 'Enabled' : 'Locked'}</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="grid gap-4 md:grid-cols-3">
+      <article class="card flex flex-col gap-4">
+        <div>
+          <p class="text-xs uppercase tracking-wide text-moss-600">Basic</p>
+          <p class="mt-1 font-serif text-3xl text-moss-800">$12<span class="text-sm text-moss-600">/mo</span></p>
+        </div>
+        <ul class="space-y-1 text-sm text-moss-700">
+          <li>In-app planner and timeline</li>
+          <li>Task completion and snooze</li>
+          <li>Email reminders locked</li>
+        </ul>
+        <button
+          data-mode="BASIC"
+          disabled={activePlan === 'BASIC'}
+          class="billing-btn mt-auto rounded-md border border-moss-200 px-3 py-2 text-sm disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          {activePlan === 'BASIC' ? 'Current Plan' : 'Switch to Basic'}
+        </button>
+      </article>
+
+      <article class="card flex flex-col gap-4 border-moss-500">
+        <div>
+          <p class="text-xs uppercase tracking-wide text-moss-600">Plus</p>
+          <p class="mt-1 font-serif text-3xl text-moss-800">$24<span class="text-sm text-moss-600">/mo</span></p>
+        </div>
+        <ul class="space-y-1 text-sm text-moss-700">
+          <li>Email reminders for due tasks</li>
+          <li>Season transition prompts</li>
+          <li>Daily digest support</li>
+        </ul>
+        <button
+          data-mode="PLUS"
+          disabled={activePlan === 'PLUS'}
+          class="billing-btn btn-primary mt-auto rounded-md px-3 py-2 text-sm disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          {activePlan === 'PLUS' ? 'Current Plan' : 'Upgrade to Plus'}
+        </button>
+      </article>
+
+      <article class="card flex flex-col gap-4">
+        <div>
+          <p class="text-xs uppercase tracking-wide text-moss-600">Ultra</p>
+          <p class="mt-1 font-serif text-3xl text-moss-800">$39<span class="text-sm text-moss-600">/mo</span></p>
+        </div>
+        <ul class="space-y-1 text-sm text-moss-700">
+          <li>Weekly focus dashboard</li>
+          <li>Richer plant and care notes</li>
+          <li>Smart warnings and insights</li>
+        </ul>
+        <button
+          data-mode="ULTRA"
+          disabled={activePlan === 'ULTRA'}
+          class="billing-btn mt-auto rounded-md border border-moss-200 px-3 py-2 text-sm disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          {activePlan === 'ULTRA' ? 'Current Plan' : 'Upgrade to Ultra'}
+        </button>
+      </article>
+    </section>
+
+    <script is:inline>
+      (() => {
+        const buttons = document.querySelectorAll('.billing-btn');
+        for (const button of buttons) {
+          button.addEventListener('click', async () => {
+            const mode = button.getAttribute('data-mode');
+            if (!mode) return;
+            button.setAttribute('disabled', 'true');
+            button.textContent = 'Redirecting...';
+            try {
+              const res = await fetch('/.netlify/functions/create-checkout-session', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ mode, userId: '${appUser.id}' })
+              });
+              const data = await res.json();
+              if (data.url) {
+                window.location.href = data.url;
+                return;
+              }
+              throw new Error('Missing checkout URL');
+            } catch {
+              button.textContent = 'Try again';
+              button.removeAttribute('disabled');
+            }
+          });
+        }
+      })();
+    </script>
+  </AppShell>
+</BaseLayout>

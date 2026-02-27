@@ -1,0 +1,1 @@
+import{r as n}from"../index.DT0VSVel.js";import"../chunk-5RWUYJKV.iI5DGQDX.js";await n({signInUrl:"/sign-in",signUpUrl:"/sign-up",sdkMetadata:{version:"2.17.7",name:"@clerk/astro",environment:"production"}});

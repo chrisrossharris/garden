@@ -1,0 +1,1 @@
+{"version":3,"file":"clerk-client.d.ts","sourceRoot":"","sources":["../../../src/server/clerk-client.ts"],"names":[],"mappings":"AAAA,OAAO,KAAK,EAAE,WAAW,EAAgB,MAAM,gBAAgB,CAAC;AAEhE,OAAO,KAAK,EAAE,UAAU,EAAE,MAAM,OAAO,CAAC;AA6BxC,QAAA,MAAM,WAAW,GAAI,SAAS,UAAU,gBAA0C,CAAC;AAEnF,OAAO,EAAE,WAAW,EAAE,CAAC"}

@@ -1,0 +1,896 @@
+---
+import BaseLayout from '@/layouts/BaseLayout.astro';
+import AppShell from '@/components/AppShell.astro';
+import { requireAppUser } from '@/lib/auth';
+import { getSpace, listAreas } from '@/lib/services/spaces';
+import { addPlanting, getPlanForSpace, listLayoutAllocationsForSpace, listPlants } from '@/lib/services/planner';
+import { getLocationProfile } from '@/lib/services/location';
+import { analyzeCompanions, suggestedZoneForPlant, suggestedZoneReasonForPlant, type BedZone } from '@/lib/engine/companions';
+import { getWeeklyForecast } from '@/lib/services/weather';
+
+const appUser = await requireAppUser(Astro.locals);
+if (!appUser) return Astro.redirect('/');
+
+const id = Astro.params.id as string;
+const space = await getSpace(id, appUser.id);
+if (!space) return Astro.redirect('/app');
+
+if (Astro.request.method === 'POST') {
+  const form = await Astro.request.formData();
+  await addPlanting({
+    areaId: String(form.get('areaId')),
+    plantId: String(form.get('plantId')),
+    quantity: Number(form.get('quantity')),
+    notes: String(form.get('notes') ?? '')
+  });
+  return Astro.redirect(`/app/spaces/${id}/planner`);
+}
+
+const plants = await listPlants({});
+const areas = await listAreas(id);
+const plan = await getPlanForSpace(id);
+const layoutAllocations = await listLayoutAllocationsForSpace(id);
+const profile = await getLocationProfile(space.zip);
+const forecast = await getWeeklyForecast(space.zip);
+
+const today = new Date();
+today.setHours(0, 0, 0, 0);
+const firstFrost = new Date(`${profile.first_frost_start}T00:00:00`);
+const daysToFirstFrost = Math.ceil((firstFrost.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
+
+const areaById = new Map(
+  areas.map((area) => [
+    area.id,
+    {
+      id: area.id,
+      name: area.name,
+      sqft: Number(area.sqft),
+      sun: area.sun_exposure,
+      notes: area.notes,
+      plantings: [] as {
+        plantId: string;
+        name: string;
+        quantity: number;
+        spacing: number;
+        sun: 'full_sun' | 'part_sun' | 'shade' | null;
+        category: string;
+      }[]
+    }
+  ])
+);
+
+for (const row of plan) {
+  if (!row.planting_id || !row.common_name || !row.spacing_inches || !row.quantity) continue;
+  const target = areaById.get(row.area_id);
+  if (!target) continue;
+  target.plantings.push({
+    plantId: row.plant_id ?? '',
+    name: row.common_name,
+    quantity: row.quantity,
+    spacing: row.spacing_inches,
+    sun: row.plant_sun,
+    category: row.category ?? 'other'
+  });
+}
+
+const wetterDays = forecast.filter((d) => d.precipProb >= 60 || d.precipMm >= 8).length;
+const frostWatchDays = forecast.filter((d) => d.minF <= 36).length;
+const bestOutdoorWindows = forecast
+  .filter((d) => d.precipProb < 35 && d.precipMm < 2 && d.maxF >= 52 && d.maxF <= 86)
+  .slice(0, 3);
+
+const bedCards = [...areaById.values()].map((area) => {
+  const bedSqInches = area.sqft * 144;
+  const usedSqInches = area.plantings.reduce((sum, p) => sum + p.quantity * p.spacing * p.spacing, 0);
+  const occupancyRaw = bedSqInches > 0 ? usedSqInches / bedSqInches : 0;
+  const occupancyPct = Math.max(0, Math.min(100, Math.round(occupancyRaw * 100)));
+  const roomPct = Math.max(0, 100 - occupancyPct);
+
+  const names = [...new Set(area.plantings.map((p) => p.name))];
+  const companionReport = analyzeCompanions(names);
+  const zoneGuide: { plantId: string; name: string; zone: BedZone; reason: string; quantity: number }[] = [];
+  const seenPlants = new Set<string>();
+  for (const p of area.plantings) {
+    if (!p.plantId || seenPlants.has(p.plantId)) continue;
+    seenPlants.add(p.plantId);
+    zoneGuide.push({
+      plantId: p.plantId,
+      name: p.name,
+      zone: suggestedZoneForPlant(p.name),
+      reason: suggestedZoneReasonForPlant(p.name),
+      quantity: p.quantity
+    });
+  }
+
+  const sunMismatchCount = area.plantings.filter((p) => p.sun !== null && p.sun !== area.sun).length;
+
+  const spaceSavingIdea =
+    occupancyPct < 50
+      ? 'Plenty of open room: add a quick crop or companion border planting.'
+      : occupancyPct < 85
+        ? 'Moderate room left: interplant short-season crops between wider spacing.'
+        : 'Bed is near full: focus on pruning, trellising, and succession timing.';
+
+  const seasonIdea =
+    daysToFirstFrost > 120
+      ? 'Long runway left this season: plan one more succession round.'
+      : daysToFirstFrost > 75
+        ? 'Mid-season: choose crops with medium days-to-maturity.'
+        : daysToFirstFrost > 45
+          ? 'Late season pivot: prioritize fast crops and transplants.'
+          : 'Very late season: shift to protection, cleanup, and overwinter prep.';
+
+  const seasonStrip = {
+    early:
+      occupancyPct < 55
+        ? 'Set structure: trellis, border pollinators, and first wave plantings.'
+        : 'Thin dense spots and reserve pockets for quick successions.',
+    mid:
+      daysToFirstFrost > 75
+        ? 'Interplant short crops between mature plants to save space.'
+        : 'Favor medium/fast maturity crops and keep airflow open.',
+    late:
+      daysToFirstFrost > 45
+        ? 'Schedule one final succession and prep mulch before cool nights.'
+        : 'Shift to protection, cleanup, and fall/overwinter transitions.'
+  };
+
+  return {
+    ...area,
+    usedSqInches,
+    occupancyPct,
+    roomPct,
+    companions: companionReport.companions,
+    cautions: companionReport.cautions,
+    suggestions: companionReport.suggestions,
+    zoneGuide,
+    sunMismatchCount,
+    spaceSavingIdea,
+    seasonIdea,
+    seasonStrip
+  };
+});
+
+const zoneGuideByArea = Object.fromEntries(
+  bedCards.map((bed) => [
+    bed.id,
+    bed.zoneGuide.map((z) => ({
+      plantId: z.plantId,
+      name: z.name,
+      zone: z.zone,
+      category: bed.plantings.find((p) => p.plantId === z.plantId)?.category ?? 'other',
+      quantity: z.quantity
+    }))
+  ])
+);
+
+const layoutByArea = Object.fromEntries(
+  bedCards.map((bed) => {
+    const initial = {
+      border: [] as { id: string; plantId: string; name: string; category: string; quantity: number }[],
+      center: [] as { id: string; plantId: string; name: string; category: string; quantity: number }[],
+      trellis: [] as { id: string; plantId: string; name: string; category: string; quantity: number }[]
+    };
+
+    const fromDb = layoutAllocations.filter((x) => x.area_id === bed.id);
+    for (const alloc of fromDb) {
+      initial[alloc.zone].push({
+        id: `${alloc.area_id}:${alloc.plant_id}:${alloc.zone}`,
+        plantId: alloc.plant_id,
+        name: alloc.plant_name,
+        category: alloc.category,
+        quantity: alloc.quantity
+      });
+    }
+
+    if (fromDb.length === 0) {
+      for (const p of bed.plantings) {
+        initial.center.push({
+          id: `${bed.id}:${p.plantId}:center`,
+          plantId: p.plantId,
+          name: p.name,
+          category: p.category,
+          quantity: p.quantity
+        });
+      }
+    }
+
+    return [bed.id, initial];
+  })
+);
+
+const categoryColor: Record<string, string> = {
+  edible: 'bg-emerald-100 text-emerald-800 border-emerald-200',
+  ornamental: 'bg-amber-100 text-amber-800 border-amber-200',
+  other: 'bg-zinc-100 text-zinc-700 border-zinc-200'
+};
+
+const companionPairRules = {
+  good: [
+    ['Tomato', 'Purple Coneflower'],
+    ['Tomato', 'Bell Pepper'],
+    ['Cucumber', 'Purple Coneflower'],
+    ['Bell Pepper', 'Purple Coneflower'],
+    ['Knock Out Rose', 'Purple Coneflower']
+  ],
+  caution: [['Tomato', 'Cucumber']]
+};
+---
+
+<BaseLayout title="Planner | Garden OS">
+  <AppShell title="Planner">
+    <section class="card space-y-4">
+      <div class="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <p class="text-xs uppercase tracking-wide text-moss-600">Visual Planner</p>
+          <h2 class="mt-1 font-serif text-3xl text-moss-800">Beds, space use, companions, and season timing</h2>
+          <p class="mt-1 text-sm text-moss-700">{daysToFirstFrost} days until first frost window starts ({profile.first_frost_start}).</p>
+        </div>
+      </div>
+
+      <form method="POST" class="grid gap-3 rounded-lg border border-moss-100 p-3 md:grid-cols-4">
+        <label class="text-sm">Area
+          <select name="areaId" class="mt-1 w-full rounded-md">
+            {areas.map((a) => <option value={a.id}>{a.name}</option>)}
+          </select>
+        </label>
+        <label class="text-sm">Plant
+          <select name="plantId" class="mt-1 w-full rounded-md">
+            {plants.map((p) => <option value={p.id}>{p.common_name}</option>)}
+          </select>
+        </label>
+        <label class="text-sm">Quantity <input class="mt-1 w-full rounded-md" type="number" min="1" name="quantity" required /></label>
+        <label class="text-sm">Notes <input class="mt-1 w-full rounded-md" name="notes" /></label>
+        <button class="btn-primary w-fit rounded-md px-4 py-2 text-sm" type="submit">Add to Bed</button>
+      </form>
+
+      <div class="grid gap-3 rounded-lg border border-moss-100 p-3 md:grid-cols-3">
+        <div>
+          <p class="text-xs uppercase tracking-wide text-moss-600">7-Day Weather Focus</p>
+          <p class="mt-1 text-sm text-moss-700">
+            {frostWatchDays > 0
+              ? `Frost watch on ${frostWatchDays} day(s). Protect new transplants and delay tender direct sowing.`
+              : wetterDays > 0
+                ? `${wetterDays} wetter day(s) ahead. Prioritize drainage checks and avoid overwatering.`
+                : 'Mostly stable conditions. Good week for transplanting and spacing adjustments.'}
+          </p>
+        </div>
+        <div>
+          <p class="text-xs uppercase tracking-wide text-moss-600">Best Outdoor Windows</p>
+          <div class="mt-1 flex flex-wrap gap-1.5">
+            {bestOutdoorWindows.length === 0 ? (
+              <span class="rounded-full border border-moss-200 px-2 py-0.5 text-xs text-moss-600">No clear window this week</span>
+            ) : (
+              bestOutdoorWindows.map((d) => (
+                <span class="rounded-full border border-moss-200 px-2 py-0.5 text-xs text-moss-700">
+                  {new Intl.DateTimeFormat('en-US', { weekday: 'short', month: 'short', day: 'numeric' }).format(new Date(`${d.date}T00:00:00`))}
+                </span>
+              ))
+            )}
+          </div>
+        </div>
+        <div>
+          <p class="text-xs uppercase tracking-wide text-moss-600">Top Forecast Snapshot</p>
+          <ul class="mt-1 space-y-1 text-xs text-moss-700">
+            {forecast.slice(0, 3).map((d) => (
+              <li>{new Intl.DateTimeFormat('en-US', { weekday: 'short' }).format(new Date(`${d.date}T00:00:00`))}: {d.summary}, {d.maxF}/{d.minF}F, {d.precipProb}% rain</li>
+            ))}
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="card space-y-4">
+      <div>
+        <p class="text-xs uppercase tracking-wide text-moss-600">Bed Footprints</p>
+        <h2 class="mt-1 font-serif text-2xl text-moss-800">Resize beds visually and sync square footage</h2>
+        <p class="mt-1 text-sm text-moss-700">Drag the right handle to adjust width. Save to update sqft and recalculate capacity.</p>
+      </div>
+
+      <div class="grid gap-3 md:grid-cols-2">
+        {bedCards.map((bed) => (
+          <article
+            class="rounded-lg border border-moss-100 bg-[var(--surface-strong)] p-3"
+            data-bed-footprint
+            data-area-id={bed.id}
+            data-bed-name={bed.name}
+            data-used-sq-inches={bed.usedSqInches}
+            data-sqft={bed.sqft}
+          >
+            <div class="flex items-center justify-between gap-2">
+              <h3 class="font-medium text-moss-800">{bed.name}</h3>
+              <span class="text-xs text-moss-600">{bed.sun.replace('_', ' ')}</span>
+            </div>
+
+            <div class="mt-2 rounded-md border border-moss-100 bg-white/70 p-2 dark:bg-black/10">
+              <div class="relative h-20 rounded border border-moss-100 bg-[var(--surface)]">
+                <div
+                  class="absolute left-1 top-1 bottom-1 rounded border border-moss-300 bg-gradient-to-r from-moss-100 to-moss-200"
+                  data-bed-rect
+                  style={`width:${Math.max(16, Math.min(96, Math.round((Number(bed.sqft) / (Number(bed.sqft) + 6)) * 100)))}%`}
+                >
+                  <button
+                    type="button"
+                    class="absolute -right-1 top-1/2 h-6 w-2 -translate-y-1/2 cursor-ew-resize rounded bg-moss-700/80"
+                    title="Drag to resize"
+                    data-bed-resize
+                  ></button>
+                </div>
+              </div>
+            </div>
+
+            <div class="mt-3 grid gap-2 md:grid-cols-[auto_1fr_auto] md:items-end">
+              <label class="text-xs">
+                Sqft
+                <input data-sqft-input class="mt-1 w-24 rounded-md" type="number" min="0.25" step="0.25" value={bed.sqft} />
+              </label>
+              <p class="text-xs text-moss-700" data-occupancy-live>{bed.occupancyPct}% used · {bed.roomPct}% open</p>
+              <button type="button" class="btn-outline rounded-md px-3 py-1.5 text-xs" data-save-sqft>Save</button>
+            </div>
+          </article>
+        ))}
+      </div>
+    </section>
+
+    <section class="grid gap-4 md:grid-cols-2">
+      {bedCards.map((bed) => (
+        <article class="card space-y-4">
+          <div class="flex items-start justify-between gap-2">
+            <div>
+              <h3 class="font-serif text-2xl text-moss-800">{bed.name}</h3>
+              <p class="text-xs text-moss-600">{bed.sqft.toFixed(2)} sqft · {bed.sun.replace('_', ' ')}</p>
+            </div>
+            <span class="rounded-full border border-moss-200 px-2 py-0.5 text-xs text-moss-600">{bed.occupancyPct}% used</span>
+          </div>
+
+          <div class="space-y-1">
+            <div class="h-3 overflow-hidden rounded-full border border-moss-200 bg-[var(--surface-strong)]">
+              <div class="h-full bg-[var(--accent)]" style={`width:${bed.occupancyPct}%`}></div>
+            </div>
+            <p class="text-xs text-moss-600">Estimated free space: {bed.roomPct}%</p>
+          </div>
+
+          <div>
+            <p class="text-xs uppercase tracking-wide text-moss-600">Planted now</p>
+            {bed.plantings.length === 0 ? (
+              <p class="mt-1 text-sm text-moss-700">No plantings yet. Add your first crop above.</p>
+            ) : (
+              <div class="mt-2 flex flex-wrap gap-2">
+                {bed.plantings.map((p) => (
+                  <span class={`rounded-full border px-2.5 py-1 text-xs ${categoryColor[p.category] ?? categoryColor.other}`}>
+                    {p.name} x{p.quantity}
+                  </span>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <div class="rounded-md border border-moss-100 p-3">
+            <div class="flex items-center justify-between gap-2">
+              <p class="text-xs uppercase tracking-wide text-moss-600">Bed Layout Sandbox</p>
+              <div class="flex gap-2">
+                <button type="button" class="btn-outline rounded-md px-2 py-1 text-xs" data-layout-autofill data-bed-id={bed.id}>Auto-arrange companions</button>
+                <button type="button" class="btn-outline rounded-md px-2 py-1 text-xs" data-layout-reset data-bed-id={bed.id}>Reset</button>
+              </div>
+            </div>
+            <p class="mt-1 text-xs text-moss-600">Drag crop chips into Border, Center, or Trellis zones to map companion placement.</p>
+
+            <div class="mt-3 grid gap-2 md:grid-cols-3" data-layout-board data-bed-id={bed.id}>
+              <div class="rounded-md border border-moss-100 bg-[var(--surface-strong)] p-2" data-drop-zone="border">
+                <p class="text-[11px] uppercase tracking-wide text-moss-600">Border</p>
+                <div class="mt-2 min-h-14 space-y-1" data-zone-items></div>
+              </div>
+              <div class="rounded-md border border-moss-100 bg-[var(--surface-strong)] p-2" data-drop-zone="center">
+                <p class="text-[11px] uppercase tracking-wide text-moss-600">Center</p>
+                <div class="mt-2 min-h-14 space-y-1" data-zone-items></div>
+              </div>
+              <div class="rounded-md border border-moss-100 bg-[var(--surface-strong)] p-2" data-drop-zone="trellis">
+                <p class="text-[11px] uppercase tracking-wide text-moss-600">Trellis Edge</p>
+                <div class="mt-2 min-h-14 space-y-1" data-zone-items></div>
+              </div>
+            </div>
+
+            <div class="mt-3 flex flex-wrap gap-2" data-layout-palette data-bed-id={bed.id}>
+              {bed.plantings.map((p) => (
+                <button
+                  type="button"
+                  draggable="true"
+                  data-palette-chip
+                  data-plant-id={p.plantId}
+                  data-name={p.name}
+                  data-category={p.category}
+                  data-quantity={p.quantity}
+                  class={`rounded-full border px-2.5 py-1 text-xs ${categoryColor[p.category] ?? categoryColor.other}`}
+                >
+                  {p.name} x{p.quantity}
+                </button>
+              ))}
+            </div>
+
+            {bed.zoneGuide.length > 0 && (
+              <ul class="mt-3 space-y-1 text-xs text-moss-700">
+                {bed.zoneGuide.map((z) => (
+                  <li>- {z.name}: place in <span class="font-medium">{z.zone}</span> to {z.reason}</li>
+                ))}
+              </ul>
+            )}
+
+            <div class="mt-3 rounded-md border border-moss-100 bg-[var(--surface-strong)] p-2" data-compat-map data-bed-id={bed.id}>
+              <div class="flex items-center justify-between gap-2">
+                <p class="text-[11px] uppercase tracking-wide text-moss-600">Companion Graph</p>
+                <div class="flex items-center gap-2 text-[10px]">
+                  <span class="inline-flex items-center gap-1 text-emerald-800"><span class="inline-block h-2 w-4 rounded bg-emerald-500"></span>Good pair</span>
+                  <span class="inline-flex items-center gap-1 text-amber-800"><span class="inline-block h-2 w-4 rounded bg-amber-500"></span>Caution</span>
+                </div>
+              </div>
+              <p class="mt-1 text-[10px] text-moss-600">Hover a node to focus its relationships.</p>
+              <svg class="mt-2 h-28 w-full rounded border border-moss-100 bg-white/60 dark:bg-black/10" data-compat-svg viewBox="0 0 100 56" preserveAspectRatio="none"></svg>
+              <ul class="mt-2 space-y-1 text-[11px] text-moss-700" data-compat-list>
+                <li>Add at least 2 crops to see compatibility links.</li>
+              </ul>
+            </div>
+          </div>
+
+          <div class="rounded-md border border-moss-100 px-3 py-2">
+            <p class="text-xs uppercase tracking-wide text-moss-600">Space-saving + succession</p>
+            <p class="mt-1 text-sm text-moss-700">{bed.spaceSavingIdea}</p>
+            <p class="mt-1 text-sm text-moss-700">{bed.seasonIdea}</p>
+          </div>
+
+          <div class="rounded-md border border-moss-100 px-3 py-2">
+            <p class="text-xs uppercase tracking-wide text-moss-600">Season Plan Strip</p>
+            <div class="mt-2 grid gap-2 md:grid-cols-3">
+              <div class="rounded-md border border-moss-100 bg-[var(--surface-strong)] p-2">
+                <p class="text-[11px] uppercase tracking-wide text-moss-600">Early</p>
+                <p class="mt-1 text-xs text-moss-700">{bed.seasonStrip.early}</p>
+              </div>
+              <div class="rounded-md border border-moss-100 bg-[var(--surface-strong)] p-2">
+                <p class="text-[11px] uppercase tracking-wide text-moss-600">Mid</p>
+                <p class="mt-1 text-xs text-moss-700">{bed.seasonStrip.mid}</p>
+              </div>
+              <div class="rounded-md border border-moss-100 bg-[var(--surface-strong)] p-2">
+                <p class="text-[11px] uppercase tracking-wide text-moss-600">Late</p>
+                <p class="mt-1 text-xs text-moss-700">{bed.seasonStrip.late}</p>
+              </div>
+            </div>
+          </div>
+
+          <div class="rounded-md border border-moss-100 px-3 py-2">
+            <p class="text-xs uppercase tracking-wide text-moss-600">Companion planting</p>
+            {bed.companions.length === 0 ? (
+              <p class="mt-1 text-sm text-moss-700">No companion pair detected yet. Add a pollinator or supportive partner crop.</p>
+            ) : (
+              <ul class="mt-1 space-y-1 text-sm text-moss-700">
+                {bed.companions.map((line) => <li>- {line}</li>)}
+              </ul>
+            )}
+            {bed.cautions.length > 0 && (
+              <ul class="mt-2 space-y-1 text-sm text-amber-700">
+                {bed.cautions.map((line) => <li>- {line}</li>)}
+              </ul>
+            )}
+            {bed.suggestions.length > 0 && (
+              <ul class="mt-2 space-y-1 text-sm text-moss-700">
+                {bed.suggestions.slice(0, 2).map((line) => <li>- {line}</li>)}
+              </ul>
+            )}
+            {bed.sunMismatchCount > 0 && (
+              <p class="mt-2 text-sm text-amber-700">{bed.sunMismatchCount} planting(s) may not match this bed's sun exposure.</p>
+            )}
+          </div>
+        </article>
+      ))}
+    </section>
+
+    <script is:inline define:vars={{ id, layoutByArea, zoneGuideByArea, companionPairRules }}>
+      (() => {
+        const spaceId = id;
+        const boards = document.querySelectorAll('[data-layout-board]');
+        const initialLayoutByArea = layoutByArea;
+        const zoneGuides = zoneGuideByArea;
+        const pairRules = companionPairRules;
+        const paletteClassByCategory = {
+          edible: 'bg-emerald-100 text-emerald-800 border-emerald-200',
+          ornamental: 'bg-amber-100 text-amber-800 border-amber-200',
+          other: 'bg-zinc-100 text-zinc-700 border-zinc-200'
+        };
+
+        const storageKey = (bedId) => `garden-layout:${spaceId}:${bedId}`;
+
+        const defaultState = () => ({ border: [], center: [], trellis: [] });
+
+        const readState = (bedId) => {
+          try {
+            const raw = localStorage.getItem(storageKey(bedId));
+            if (!raw) return initialLayoutByArea[bedId] || defaultState();
+            const parsed = JSON.parse(raw);
+            return {
+              border: Array.isArray(parsed.border) ? parsed.border : [],
+              center: Array.isArray(parsed.center) ? parsed.center : [],
+              trellis: Array.isArray(parsed.trellis) ? parsed.trellis : []
+            };
+          } catch {
+            return initialLayoutByArea[bedId] || defaultState();
+          }
+        };
+
+        const writeState = (bedId, state) => {
+          localStorage.setItem(storageKey(bedId), JSON.stringify(state));
+        };
+
+        const normalizeKey = (a, b) => [a, b].sort().join('|');
+        const goodPairs = new Set((pairRules?.good || []).map((pair) => normalizeKey(pair[0], pair[1])));
+        const cautionPairs = new Set((pairRules?.caution || []).map((pair) => normalizeKey(pair[0], pair[1])));
+        const esc = (s) =>
+          String(s ?? '')
+            .replaceAll('&', '&amp;')
+            .replaceAll('<', '&lt;')
+            .replaceAll('>', '&gt;')
+            .replaceAll('"', '&quot;')
+            .replaceAll("'", '&#39;');
+        const activeCompatByBed = {};
+
+        const chipHtml = (entry, zone, idx) => {
+          const cls = paletteClassByCategory[entry.category] || paletteClassByCategory.other;
+          return `<div class=\"flex items-center justify-between rounded-full border px-2 py-1 text-xs ${cls}\" draggable=\"true\" data-zone-chip data-zone=\"${zone}\" data-index=\"${idx}\" data-name=\"${entry.name}\" data-category=\"${entry.category}\" data-id=\"${entry.id}\" data-plant-id=\"${entry.plantId}\" data-quantity=\"${entry.quantity}\"><span>${entry.name} x${entry.quantity}</span><button type=\"button\" class=\"ml-2 rounded px-1 text-[10px]\" data-remove-chip data-zone=\"${zone}\" data-index=\"${idx}\">x</button></div>`;
+        };
+
+        const saveToServer = async (bedId, state) => {
+          const placements = ['border', 'center', 'trellis'].flatMap((zone) =>
+            (state[zone] || []).map((entry) => ({
+              plantId: entry.plantId,
+              zone,
+              quantity: Number(entry.quantity) || 1
+            }))
+          );
+          try {
+            await fetch(`/api/spaces/${spaceId}/layout`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ areaId: bedId, placements })
+            });
+          } catch {
+            // keep local state if offline/error
+          }
+        };
+
+        const renderBoard = (board, state) => {
+          const zones = ['border', 'center', 'trellis'];
+          for (const zone of zones) {
+            const zoneEl = board.querySelector(`[data-drop-zone=\"${zone}\"] [data-zone-items]`);
+            if (!zoneEl) continue;
+            const items = state[zone] || [];
+            zoneEl.innerHTML = items.map((entry, idx) => chipHtml(entry, zone, idx)).join('');
+          }
+        };
+
+        const renderCompatibilityMap = (bedId, state) => {
+          const mapEl = document.querySelector(`[data-compat-map][data-bed-id=\"${bedId}\"]`);
+          if (!(mapEl instanceof HTMLElement)) return;
+          const svg = mapEl.querySelector('[data-compat-svg]');
+          const list = mapEl.querySelector('[data-compat-list]');
+          if (!(svg instanceof SVGElement) || !(list instanceof HTMLElement)) return;
+          const activeKey = activeCompatByBed[bedId] || null;
+
+          const entries = ['border', 'center', 'trellis'].flatMap((zone) => (state[zone] || []).map((e) => ({ ...e, zone })));
+          const nodes = [];
+          const seen = new Set();
+          for (const e of entries) {
+            const key = e.plantId || e.name;
+            if (!key || seen.has(key)) continue;
+            seen.add(key);
+            nodes.push({ key, name: e.name });
+          }
+
+          if (nodes.length < 2) {
+            svg.innerHTML = '<text x="50" y="30" text-anchor="middle" font-size="4" fill="#6b7f73">Add at least 2 crops for compatibility lines</text>';
+            list.innerHTML = '<li>Add at least 2 crops to see compatibility links.</li>';
+            return;
+          }
+
+          const cx = 50;
+          const cy = 28;
+          const radius = nodes.length <= 3 ? 18 : 22;
+          const positioned = nodes.map((node, idx) => {
+            const theta = (Math.PI * 2 * idx) / nodes.length - Math.PI / 2;
+            return {
+              ...node,
+              x: cx + radius * Math.cos(theta),
+              y: cy + radius * Math.sin(theta)
+            };
+          });
+
+          const links = [];
+          for (let i = 0; i < positioned.length; i += 1) {
+            for (let j = i + 1; j < positioned.length; j += 1) {
+              const a = positioned[i];
+              const b = positioned[j];
+              const key = normalizeKey(a.name, b.name);
+              const relation = goodPairs.has(key) ? 'good' : cautionPairs.has(key) ? 'caution' : null;
+              if (!relation) continue;
+              links.push({ a, b, relation });
+            }
+          }
+
+          const linkSvg = links
+            .map((l) => {
+              const stroke = l.relation === 'good' ? '#22c55e' : '#f59e0b';
+              const isActive = activeKey ? l.a.key === activeKey || l.b.key === activeKey : true;
+              return `<line x1="${l.a.x}" y1="${l.a.y}" x2="${l.b.x}" y2="${l.b.y}" stroke="${stroke}" stroke-width="${isActive ? '1.8' : '1'}" opacity="${isActive ? '0.98' : '0.2'}" data-link-a="${esc(l.a.key)}" data-link-b="${esc(l.b.key)}" />`;
+            })
+            .join('');
+          const nodeSvg = positioned
+            .map(
+              (n) => {
+                const isActive = activeKey ? n.key === activeKey : false;
+                return `<g><circle cx="${n.x}" cy="${n.y}" r="${isActive ? '3.8' : '3.2'}" fill="#f8f7f2" stroke="${isActive ? '#1d4ed8' : '#35533f'}" stroke-width="${isActive ? '1.8' : '1.1'}" data-node-key="${esc(n.key)}"/><text x="${n.x}" y="${n.y + 6.8}" text-anchor="middle" font-size="3" fill="#2f3f36">${esc(n.name.slice(0, 12))}</text></g>`;
+              }
+            )
+            .join('');
+          svg.innerHTML = `${linkSvg}${nodeSvg}`;
+
+          svg.querySelectorAll('[data-node-key]').forEach((node) => {
+            node.addEventListener('mouseenter', () => {
+              const key = node.getAttribute('data-node-key');
+              if (!key) return;
+              activeCompatByBed[bedId] = key;
+              renderCompatibilityMap(bedId, state);
+            });
+            node.addEventListener('mouseleave', () => {
+              if (!activeCompatByBed[bedId]) return;
+              delete activeCompatByBed[bedId];
+              renderCompatibilityMap(bedId, state);
+            });
+          });
+
+          if (links.length === 0) {
+            list.innerHTML = '<li>No known companion/caution links among current crops.</li>';
+            return;
+          }
+          const visibleLinks = activeKey
+            ? links.filter((l) => l.a.key === activeKey || l.b.key === activeKey)
+            : links;
+          list.innerHTML = visibleLinks
+            .map((l) => {
+              const tone = l.relation === 'good' ? 'text-emerald-800' : 'text-amber-800';
+              const verb = l.relation === 'good' ? 'supports' : 'can compete with';
+              return `<li class="${tone}">- ${esc(l.a.name)} ${verb} ${esc(l.b.name)}</li>`;
+            })
+            .join('');
+        };
+
+        const attachBoard = (board) => {
+          const bedId = board.getAttribute('data-bed-id');
+          if (!bedId) return;
+          let state = readState(bedId);
+          renderBoard(board, state);
+          renderCompatibilityMap(bedId, state);
+
+          board.querySelectorAll('[data-drop-zone]').forEach((zoneEl) => {
+            const zone = zoneEl.getAttribute('data-drop-zone');
+            zoneEl.addEventListener('dragover', (e) => {
+              e.preventDefault();
+              zoneEl.classList.add('ring-2', 'ring-[var(--ring)]');
+            });
+            zoneEl.addEventListener('dragleave', () => {
+              zoneEl.classList.remove('ring-2', 'ring-[var(--ring)]');
+            });
+            zoneEl.addEventListener('drop', (e) => {
+              e.preventDefault();
+              zoneEl.classList.remove('ring-2', 'ring-[var(--ring)]');
+              const payload = e.dataTransfer?.getData('text/plain');
+              if (!payload || !zone) return;
+
+              try {
+                const data = JSON.parse(payload);
+                if (data.fromZone && Number.isInteger(data.index)) {
+                  const srcItems = state[data.fromZone] || [];
+                  const [moved] = srcItems.splice(data.index, 1);
+                  if (moved) {
+                    (state[zone] ||= []).push(moved);
+                  }
+                } else if (data.name) {
+                  for (const z of ['border', 'center', 'trellis']) {
+                    state[z] = (state[z] || []).filter((entry) => entry.plantId !== data.plantId);
+                  }
+                  (state[zone] ||= []).push({
+                    id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+                    plantId: data.plantId || '',
+                    name: data.name,
+                    category: data.category || 'other',
+                    quantity: Number(data.quantity) || 1
+                  });
+                }
+                writeState(bedId, state);
+                renderBoard(board, state);
+                renderCompatibilityMap(bedId, state);
+                void saveToServer(bedId, state);
+              } catch {
+                // ignore malformed drag payload
+              }
+            });
+          });
+
+          board.addEventListener('click', (e) => {
+            const target = e.target;
+            if (!(target instanceof HTMLElement)) return;
+            if (!target.hasAttribute('data-remove-chip')) return;
+            const zone = target.getAttribute('data-zone');
+            const index = Number(target.getAttribute('data-index'));
+            if (!zone || Number.isNaN(index)) return;
+            const items = state[zone] || [];
+            items.splice(index, 1);
+            writeState(bedId, state);
+            renderBoard(board, state);
+            renderCompatibilityMap(bedId, state);
+            void saveToServer(bedId, state);
+          });
+
+          board.addEventListener('dragstart', (e) => {
+            const target = e.target;
+            if (!(target instanceof HTMLElement)) return;
+            if (!target.hasAttribute('data-zone-chip')) return;
+            const fromZone = target.getAttribute('data-zone');
+            const index = Number(target.getAttribute('data-index'));
+            const name = target.getAttribute('data-name');
+            const category = target.getAttribute('data-category');
+            const plantId = target.getAttribute('data-plant-id');
+            const quantity = target.getAttribute('data-quantity');
+            if (!fromZone || Number.isNaN(index) || !name) return;
+            e.dataTransfer?.setData('text/plain', JSON.stringify({ fromZone, index, name, category, plantId, quantity }));
+          });
+        };
+
+        document.querySelectorAll('[data-layout-palette]').forEach((palette) => {
+          palette.querySelectorAll('[data-palette-chip]').forEach((chip) => {
+            chip.addEventListener('dragstart', (e) => {
+              const target = e.target;
+              if (!(target instanceof HTMLElement)) return;
+              const name = target.getAttribute('data-name');
+              const category = target.getAttribute('data-category');
+              const plantId = target.getAttribute('data-plant-id');
+              const quantity = target.getAttribute('data-quantity');
+              if (!name) return;
+              e.dataTransfer?.setData('text/plain', JSON.stringify({ name, category, plantId, quantity }));
+            });
+          });
+        });
+
+        document.querySelectorAll('[data-layout-reset]').forEach((btn) => {
+          btn.addEventListener('click', () => {
+            const bedId = btn.getAttribute('data-bed-id');
+            if (!bedId) return;
+            localStorage.removeItem(storageKey(bedId));
+            const board = document.querySelector(`[data-layout-board][data-bed-id=\"${bedId}\"]`);
+            if (!(board instanceof HTMLElement)) return;
+            const resetState = initialLayoutByArea[bedId] || defaultState();
+            renderBoard(board, resetState);
+            renderCompatibilityMap(bedId, resetState);
+            writeState(bedId, resetState);
+            void saveToServer(bedId, resetState);
+          });
+        });
+
+        document.querySelectorAll('[data-layout-autofill]').forEach((btn) => {
+          btn.addEventListener('click', () => {
+            const bedId = btn.getAttribute('data-bed-id');
+            if (!bedId) return;
+            const board = document.querySelector(`[data-layout-board][data-bed-id=\"${bedId}\"]`);
+            if (!(board instanceof HTMLElement)) return;
+            const suggested = Array.isArray(zoneGuides?.[bedId]) ? zoneGuides[bedId] : [];
+            if (suggested.length === 0) return;
+            const nextState = defaultState();
+            for (const s of suggested) {
+              (nextState[s.zone] ||= []).push({
+                id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+                plantId: s.plantId || '',
+                name: s.name,
+                category: s.category || 'other',
+                quantity: Number(s.quantity) || 1
+              });
+            }
+            renderBoard(board, nextState);
+            renderCompatibilityMap(bedId, nextState);
+            writeState(bedId, nextState);
+            void saveToServer(bedId, nextState);
+          });
+        });
+
+        const clamp = (n, min, max) => Math.max(min, Math.min(max, n));
+        const updateFootprintVisual = (card, sqft) => {
+          const rect = card.querySelector('[data-bed-rect]');
+          const input = card.querySelector('[data-sqft-input]');
+          const occ = card.querySelector('[data-occupancy-live]');
+          if (!(rect instanceof HTMLElement) || !(input instanceof HTMLInputElement) || !(occ instanceof HTMLElement)) return;
+          const pctWidth = clamp(Math.round((sqft / (sqft + 6)) * 100), 16, 96);
+          rect.style.width = `${pctWidth}%`;
+          input.value = String(Math.round(sqft * 100) / 100);
+
+          const usedSqInches = Number(card.getAttribute('data-used-sq-inches') || '0');
+          const totalSqInches = sqft * 144;
+          const usedPct = totalSqInches > 0 ? clamp(Math.round((usedSqInches / totalSqInches) * 100), 0, 999) : 0;
+          const openPct = clamp(100 - usedPct, 0, 100);
+          occ.textContent = `${usedPct}% used · ${openPct}% open`;
+        };
+
+        document.querySelectorAll('[data-bed-footprint]').forEach((card) => {
+          const areaId = card.getAttribute('data-area-id');
+          const resizeHandle = card.querySelector('[data-bed-resize]');
+          const input = card.querySelector('[data-sqft-input]');
+          const saveBtn = card.querySelector('[data-save-sqft]');
+          if (!areaId || !(resizeHandle instanceof HTMLElement) || !(input instanceof HTMLInputElement) || !(saveBtn instanceof HTMLButtonElement)) return;
+
+          let dragState = null;
+          const startDrag = (clientX) => {
+            dragState = {
+              startX: clientX,
+              startSqft: Number(input.value || card.getAttribute('data-sqft') || '1')
+            };
+          };
+          const moveDrag = (clientX) => {
+            if (!dragState) return;
+            const dx = clientX - dragState.startX;
+            const widthFeetDelta = dx / 18;
+            const baseWidthFeet = dragState.startSqft / 4;
+            const nextWidthFeet = clamp(baseWidthFeet + widthFeetDelta, 0.25, 80);
+            const nextSqft = Math.round(nextWidthFeet * 4 * 4) / 4;
+            updateFootprintVisual(card, nextSqft);
+          };
+          const endDrag = () => {
+            dragState = null;
+            document.body.classList.remove('select-none');
+          };
+
+          resizeHandle.addEventListener('mousedown', (e) => {
+            e.preventDefault();
+            startDrag(e.clientX);
+            document.body.classList.add('select-none');
+          });
+          window.addEventListener('mousemove', (e) => moveDrag(e.clientX));
+          window.addEventListener('mouseup', endDrag);
+
+          resizeHandle.addEventListener('touchstart', (e) => {
+            if (e.touches.length === 0) return;
+            startDrag(e.touches[0].clientX);
+          }, { passive: true });
+          window.addEventListener('touchmove', (e) => {
+            if (e.touches.length === 0) return;
+            moveDrag(e.touches[0].clientX);
+          }, { passive: true });
+          window.addEventListener('touchend', endDrag);
+
+          input.addEventListener('input', () => {
+            const sqft = clamp(Number(input.value || '1'), 0.25, 20000);
+            updateFootprintVisual(card, sqft);
+          });
+
+          saveBtn.addEventListener('click', async () => {
+            const sqft = clamp(Number(input.value || '1'), 0.25, 20000);
+            saveBtn.disabled = true;
+            const oldText = saveBtn.textContent;
+            saveBtn.textContent = 'Saving...';
+            try {
+              const res = await fetch(`/api/spaces/${spaceId}/areas/${areaId}`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ sqft })
+              });
+              if (!res.ok) throw new Error(await res.text());
+              card.setAttribute('data-sqft', String(sqft));
+              saveBtn.textContent = 'Saved';
+              setTimeout(() => {
+                saveBtn.textContent = oldText || 'Save';
+                window.location.reload();
+              }, 450);
+            } catch {
+              saveBtn.textContent = 'Retry save';
+              saveBtn.disabled = false;
+            }
+          });
+        });
+
+        boards.forEach((board) => attachBoard(board));
+      })();
+    </script>
+  </AppShell>
+</BaseLayout>

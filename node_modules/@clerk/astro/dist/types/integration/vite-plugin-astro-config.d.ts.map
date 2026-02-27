@@ -1,0 +1,1 @@
+{"version":3,"file":"vite-plugin-astro-config.d.ts","sourceRoot":"","sources":["../../../src/integration/vite-plugin-astro-config.ts"],"names":[],"mappings":"AAAA,OAAO,KAAK,EAAE,WAAW,EAAE,MAAM,OAAO,CAAC;AAEzC,KAAK,UAAU,GAAG,QAAQ,CAAC,WAAW,CAAC,MAAM,CAAC,CAAC,CAAC,SAAS,CAAC,CAAC,MAAM,CAAC,CAAC;AAEnE;;;;;;GAMG;AACH,wBAAgB,qBAAqB,CAAC,WAAW,EAAE,WAAW,GAAG,UAAU,CAyC1E"}

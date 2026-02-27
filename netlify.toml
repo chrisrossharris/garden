@@ -1,0 +1,14 @@
+[build]
+  command = "npm run build"
+  publish = "dist"
+  functions = "netlify/functions"
+
+[functions]
+  node_bundler = "esbuild"
+
+[[plugins]]
+  package = "@netlify/plugin-scheduled-functions"
+
+[[scheduled.functions]]
+  name = "send-reminders"
+  cron = "0 13 * * *"

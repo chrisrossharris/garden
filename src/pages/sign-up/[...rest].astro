@@ -1,0 +1,13 @@
+---
+import BaseLayout from '@/layouts/BaseLayout.astro';
+import { SignUp } from '@clerk/astro/components';
+---
+
+<BaseLayout title="Create account | Garden OS">
+  <section class="mx-auto max-w-md">
+    <div class="card">
+      <h1 class="mb-4 font-serif text-3xl text-moss-800">Create account</h1>
+      <SignUp routing="path" path="/sign-up" signInUrl="/sign-in" forceRedirectUrl="/app" />
+    </div>
+  </section>
+</BaseLayout>

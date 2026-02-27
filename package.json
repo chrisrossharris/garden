@@ -1,0 +1,43 @@
+{
+  "name": "garden-os",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "dev": "astro dev",
+    "build": "astro check && astro build",
+    "preview": "astro preview",
+    "astro": "astro",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "db:migrate": "node --env-file=.env --import tsx scripts/run-migrations.ts",
+    "db:seed": "node --env-file=.env --import tsx db/seeds/seed.ts"
+  },
+  "dependencies": {
+    "@astrojs/check": "^0.9.4",
+    "@astrojs/netlify": "^6.4.1",
+    "@clerk/astro": "^2.11.7",
+    "@netlify/blobs": "^7.0.0",
+    "@netlify/functions": "^2.8.2",
+    "@neondatabase/serverless": "^0.10.4",
+    "astro": "^5.2.3",
+    "dayjs": "^1.11.13",
+    "pdfkit": "^0.15.0",
+    "stripe": "^17.6.0",
+    "tailwindcss": "^3.4.17",
+    "zod": "^3.24.2"
+  },
+  "devDependencies": {
+    "@tailwindcss/forms": "^0.5.10",
+    "@types/node": "^22.13.10",
+    "@types/pdfkit": "^0.17.2",
+    "autoprefixer": "^10.4.20",
+    "postcss": "^8.5.3",
+    "tsx": "^4.19.3",
+    "typescript": "^5.8.2",
+    "vitest": "^3.0.8"
+  }
+}

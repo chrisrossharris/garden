@@ -1,0 +1,262 @@
+---
+import BaseLayout from '@/layouts/BaseLayout.astro';
+import AppShell from '@/components/AppShell.astro';
+import { requireAppUser } from '@/lib/auth';
+import { createArea, getSpace, listAreas, refreshSpaceSqft, updateArea } from '@/lib/services/spaces';
+import { getLocationProfile } from '@/lib/services/location';
+
+const appUser = await requireAppUser(Astro.locals);
+if (!appUser) return Astro.redirect('/');
+
+const id = Astro.params.id as string;
+const space = await getSpace(id, appUser.id);
+if (!space) return Astro.redirect('/app');
+
+if (Astro.request.method === 'POST') {
+  const form = await Astro.request.formData();
+  const action = String(form.get('action') ?? '');
+  if (action === 'add-area') {
+    await createArea({
+      spaceId: id,
+      name: String(form.get('name') ?? 'New Bed'),
+      type: String(form.get('type') ?? 'bed'),
+      sqft: Number(form.get('sqft') ?? 1),
+      sunExposure: String(form.get('sun_exposure') ?? 'full_sun') as 'full_sun' | 'part_sun' | 'shade',
+      notes: String(form.get('notes') ?? '')
+    });
+    await refreshSpaceSqft(id);
+    return Astro.redirect(`/app/spaces/${id}`);
+  }
+  if (action === 'update-area') {
+    await updateArea({
+      spaceId: id,
+      areaId: String(form.get('area_id') ?? ''),
+      name: String(form.get('name') ?? 'Bed'),
+      type: String(form.get('type') ?? 'bed'),
+      sqft: Math.max(0.25, Number(form.get('sqft') ?? 1)),
+      sunExposure: String(form.get('sun_exposure') ?? 'full_sun') as 'full_sun' | 'part_sun' | 'shade',
+      notes: String(form.get('notes') ?? '')
+    });
+    await refreshSpaceSqft(id);
+    return Astro.redirect(`/app/spaces/${id}`);
+  }
+}
+
+const areas = await listAreas(id);
+const profile = await getLocationProfile(space.zip);
+
+const dateFmt = new Intl.DateTimeFormat('en-US', {
+  month: 'short',
+  day: 'numeric',
+  year: 'numeric'
+});
+
+const formatDate = (iso: string) => dateFmt.format(new Date(`${iso}T00:00:00`));
+const lastFrostRange = `${formatDate(profile.last_frost_start)} - ${formatDate(profile.last_frost_end)}`;
+const firstFrostRange = `${formatDate(profile.first_frost_start)} - ${formatDate(profile.first_frost_end)}`;
+
+const toDate = (iso: string) => new Date(`${iso}T00:00:00`);
+const addDays = (date: Date, days: number) => {
+  const clone = new Date(date);
+  clone.setDate(clone.getDate() + days);
+  return clone;
+};
+
+const today = new Date();
+today.setHours(0, 0, 0, 0);
+const lastFrostStart = toDate(profile.last_frost_start);
+const lastFrostEnd = toDate(profile.last_frost_end);
+const firstFrostStart = toDate(profile.first_frost_start);
+
+const totalSqft = areas.reduce((sum, area) => sum + Number(area.sqft), 0);
+
+const seasonPhase =
+  today < lastFrostStart
+    ? 'Pre-frost-clear window'
+    : today <= lastFrostEnd
+      ? 'Late frost transition'
+      : today < firstFrostStart
+        ? 'Main growing season'
+        : 'Frost-risk season';
+
+const weatherGuidance =
+  today < lastFrostStart
+    ? 'Cool soil likely. Focus on indoor seed starts and bed prep.'
+    : today <= lastFrostEnd
+      ? 'Variable nights. Harden seedlings and watch overnight lows.'
+      : today < firstFrostStart
+        ? 'Warmer, active growth period. Prioritize watering and succession sowing.'
+        : 'Cooling weather. Shift to cleanup, mulching, and fall protection.';
+
+const taskWindows = [
+  {
+    title: 'Tomatoes',
+    type: 'Start indoors',
+    start: addDays(lastFrostStart, -56),
+    end: addDays(lastFrostEnd, -42)
+  },
+  {
+    title: 'Bell peppers',
+    type: 'Start indoors',
+    start: addDays(lastFrostStart, -70),
+    end: addDays(lastFrostEnd, -56)
+  },
+  {
+    title: 'Cucumbers',
+    type: 'Direct sow outside',
+    start: addDays(lastFrostEnd, 7),
+    end: addDays(lastFrostEnd, 14)
+  },
+  {
+    title: 'Lettuce',
+    type: 'Direct sow outside',
+    start: addDays(lastFrostStart, -14),
+    end: addDays(lastFrostEnd, 14)
+  }
+].map((task) => {
+  let status: 'Now' | 'Upcoming' | 'Passed' = 'Upcoming';
+  if (today >= task.start && today <= task.end) status = 'Now';
+  if (today > task.end) status = 'Passed';
+  return { ...task, status };
+});
+---
+
+<BaseLayout title={`${space.name} | Garden OS`}>
+  <AppShell title={space.name}>
+    <div class="grid gap-4 md:grid-cols-3">
+      <div class="card md:col-span-2 space-y-4">
+        <div class="flex items-start justify-between gap-3">
+          <div>
+            <h2 class="font-semibold text-moss-800">Area List</h2>
+            <p class="text-xs text-moss-600">{areas.length} areas · {totalSqft.toFixed(2)} total sqft</p>
+          </div>
+        </div>
+
+        <ul class="space-y-2">
+          {areas.map((area) => (
+            <li class="rounded-md border border-moss-100 px-3 py-2 text-sm">
+              <div class="flex items-center justify-between gap-2">
+                <p><span class="font-medium">{area.name}</span> · {area.sqft} sqft · {area.sun_exposure.replace('_', ' ')}</p>
+                <span class="rounded-full border border-moss-200 px-2 py-0.5 text-xs text-moss-600">{area.type}</span>
+              </div>
+              {area.notes && <p class="mt-1 text-xs text-moss-600">{area.notes}</p>}
+              <details class="mt-2 rounded-md border border-moss-100 bg-[var(--surface-strong)] p-2">
+                <summary class="cursor-pointer text-xs font-medium text-moss-700">Edit area</summary>
+                <form method="POST" class="mt-2 grid gap-2 md:grid-cols-2">
+                  <input type="hidden" name="action" value="update-area" />
+                  <input type="hidden" name="area_id" value={area.id} />
+                  <label class="text-xs">Name <input class="mt-1 w-full rounded-md" name="name" value={area.name} required /></label>
+                  <label class="text-xs">Type <input class="mt-1 w-full rounded-md" name="type" value={area.type} required /></label>
+                  <label class="text-xs">Square feet
+                    <input class="mt-1 w-full rounded-md" type="number" min="0.25" step="0.25" name="sqft" value={area.sqft} required />
+                  </label>
+                  <label class="text-xs">Sun
+                    <select class="mt-1 w-full rounded-md" name="sun_exposure">
+                      <option value="full_sun" selected={area.sun_exposure === 'full_sun'}>Full sun</option>
+                      <option value="part_sun" selected={area.sun_exposure === 'part_sun'}>Part sun</option>
+                      <option value="shade" selected={area.sun_exposure === 'shade'}>Shade</option>
+                    </select>
+                  </label>
+                  <label class="text-xs md:col-span-2">Notes
+                    <input class="mt-1 w-full rounded-md" name="notes" value={area.notes ?? ''} />
+                  </label>
+                  <button class="btn-primary w-fit rounded-md px-3 py-1.5 text-xs" type="submit">Save area</button>
+                </form>
+              </details>
+            </li>
+          ))}
+        </ul>
+
+        <details class="rounded-md border border-moss-100 p-3">
+          <summary class="cursor-pointer text-sm font-medium text-moss-800">Add another bed or area</summary>
+          <form method="POST" class="mt-3 grid gap-3 md:grid-cols-2">
+            <input type="hidden" name="action" value="add-area" />
+            <label class="text-sm">Name <input class="mt-1 w-full rounded-md" name="name" placeholder="Bed 2" required /></label>
+            <label class="text-sm">Type <input class="mt-1 w-full rounded-md" name="type" placeholder="raised bed, border, container" required /></label>
+            <label class="text-sm">Square feet <input class="mt-1 w-full rounded-md" type="number" min="1" step="0.25" name="sqft" required /></label>
+            <label class="text-sm">Sun
+              <select class="mt-1 w-full rounded-md" name="sun_exposure">
+                <option value="full_sun">Full sun</option>
+                <option value="part_sun">Part sun</option>
+                <option value="shade">Shade</option>
+              </select>
+            </label>
+            <label class="text-sm md:col-span-2">Notes <input class="mt-1 w-full rounded-md" name="notes" placeholder="Near fence, easy hose access" /></label>
+            <button class="btn-primary w-fit rounded-md px-3 py-2 text-sm" type="submit">Add Area</button>
+          </form>
+        </details>
+      </div>
+      <div class="space-y-4">
+        <div class="card space-y-4">
+          <div class="flex items-start justify-between gap-3">
+            <h2 class="font-serif text-2xl text-moss-800">Local Profile</h2>
+            <span class="rounded-full border border-moss-200 px-2.5 py-1 text-xs uppercase tracking-wide text-moss-600">
+              {profile.source}
+            </span>
+          </div>
+
+          <div class="grid grid-cols-2 gap-3">
+            <div class="rounded-lg border border-moss-100 px-3 py-2">
+              <p class="text-xs uppercase tracking-wide text-moss-600">ZIP</p>
+              <p class="mt-1 text-lg font-semibold text-moss-800">{profile.zip}</p>
+            </div>
+            <div class="rounded-lg border border-moss-100 px-3 py-2">
+              <p class="text-xs uppercase tracking-wide text-moss-600">Zone</p>
+              <p class="mt-1 text-lg font-semibold text-moss-800">{profile.zone}</p>
+            </div>
+          </div>
+
+          <div class="space-y-3">
+            <div class="rounded-lg border border-moss-100 px-3 py-2">
+              <p class="text-xs uppercase tracking-wide text-moss-600">Last Frost Window</p>
+              <p class="mt-1 text-sm font-medium text-moss-800">{lastFrostRange}</p>
+            </div>
+            <div class="rounded-lg border border-moss-100 px-3 py-2">
+              <p class="text-xs uppercase tracking-wide text-moss-600">First Frost Window</p>
+              <p class="mt-1 text-sm font-medium text-moss-800">{firstFrostRange}</p>
+            </div>
+          </div>
+
+          <p class="text-xs text-moss-600">
+            Season length: approximately {profile.season_length_days} days
+          </p>
+        </div>
+
+        <div class="card space-y-2">
+          <h3 class="font-semibold text-moss-800">Weather + Seasonal Signal</h3>
+          <p class="text-xs uppercase tracking-wide text-moss-600">{seasonPhase}</p>
+          <p class="text-sm text-moss-700">{weatherGuidance}</p>
+        </div>
+
+        <div class="card space-y-3">
+          <h3 class="font-semibold text-moss-800">What To Start Now</h3>
+          <ul class="space-y-2">
+            {taskWindows.map((task) => (
+              <li class="rounded-md border border-moss-100 px-3 py-2 text-sm">
+                <div class="flex items-center justify-between gap-2">
+                  <p><span class="font-medium">{task.title}</span> · {task.type}</p>
+                  <span class={`rounded-full px-2 py-0.5 text-xs ${
+                    task.status === 'Now'
+                      ? 'bg-green-100 text-green-800'
+                      : task.status === 'Upcoming'
+                        ? 'bg-amber-100 text-amber-800'
+                        : 'bg-zinc-200 text-zinc-700'
+                  }`}>{task.status}</span>
+                </div>
+                <p class="mt-1 text-xs text-moss-600">
+                  Window: {dateFmt.format(task.start)} - {dateFmt.format(task.end)}
+                </p>
+              </li>
+            ))}
+          </ul>
+        </div>
+      </div>
+    </div>
+
+    <div class="flex flex-wrap gap-2 text-sm">
+      <a class="rounded-md border border-moss-200 px-3 py-1.5" href={`/app/spaces/${id}/planner`}>Planner</a>
+      <a class="rounded-md border border-moss-200 px-3 py-1.5" href={`/app/spaces/${id}/timeline`}>Timeline</a>
+      <a class="rounded-md border border-moss-200 px-3 py-1.5" href={`/app/spaces/${id}/blueprint`}>Blueprint</a>
+    </div>
+  </AppShell>
+</BaseLayout>

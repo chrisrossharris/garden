@@ -1,0 +1,90 @@
+---
+import BaseLayout from '@/layouts/BaseLayout.astro';
+import AppShell from '@/components/AppShell.astro';
+import { requireAppUser } from '@/lib/auth';
+import { createSpace, createArea, refreshSpaceSqft } from '@/lib/services/spaces';
+
+const appUser = await requireAppUser(Astro.locals);
+if (!appUser) return Astro.redirect('/');
+
+let createdSpaceId: string | null = null;
+
+if (Astro.request.method === 'POST') {
+  const form = await Astro.request.formData();
+  const action = form.get('action');
+
+  if (action === 'create-space') {
+    const name = String(form.get('name') ?? 'My Garden');
+    const zip = String(form.get('zip') ?? '');
+    const goals = {
+      native: form.get('native') === 'on',
+      ornamental: form.get('ornamental') === 'on',
+      roses: form.get('roses') === 'on',
+      edible: form.get('edible') === 'on',
+      pollinator: form.get('pollinator') === 'on',
+      lowMaintenance: form.get('lowMaintenance') === 'on'
+    };
+    const space = await createSpace({ userId: appUser.id, name, zip, goals });
+    createdSpaceId = space?.id ?? null;
+  }
+
+  if (action === 'add-area') {
+    const spaceId = String(form.get('spaceId'));
+    await createArea({
+      spaceId,
+      name: String(form.get('areaName')),
+      type: String(form.get('areaType')),
+      sqft: Number(form.get('sqft') ?? 0),
+      sunExposure: String(form.get('sun')) as 'full_sun' | 'part_sun' | 'shade',
+      notes: String(form.get('notes') ?? '')
+    });
+    await refreshSpaceSqft(spaceId);
+    return Astro.redirect(`/app/spaces/${spaceId}`);
+  }
+}
+---
+
+<BaseLayout title="New Space | Garden OS">
+  <AppShell title="Blueprint Wizard">
+    <div class="card">
+      <p class="mb-4 text-sm text-moss-700">Step 1 of 5: Space intake + goals.</p>
+      <form method="POST" class="grid gap-3 md:grid-cols-2">
+        <input type="hidden" name="action" value="create-space" />
+        <label class="text-sm">Space name <input class="mt-1 w-full rounded-md" name="name" required /></label>
+        <label class="text-sm">ZIP <input class="mt-1 w-full rounded-md" name="zip" required pattern="[0-9]{5}" /></label>
+        <fieldset class="md:col-span-2">
+          <legend class="text-sm font-medium">Goals</legend>
+          <div class="mt-2 flex flex-wrap gap-3 text-sm">
+            <label><input type="checkbox" name="native" /> Native</label>
+            <label><input type="checkbox" name="ornamental" /> Ornamental</label>
+            <label><input type="checkbox" name="roses" /> Roses</label>
+            <label><input type="checkbox" name="edible" /> Edible</label>
+            <label><input type="checkbox" name="pollinator" /> Pollinator focus</label>
+            <label><input type="checkbox" name="lowMaintenance" /> Low maintenance</label>
+          </div>
+        </fieldset>
+        <button class="w-fit rounded-md bg-moss-700 px-4 py-2 text-sm text-white" type="submit">Save and continue</button>
+      </form>
+
+      {createdSpaceId && (
+        <form method="POST" class="mt-8 grid gap-3 md:grid-cols-2">
+          <input type="hidden" name="action" value="add-area" />
+          <input type="hidden" name="spaceId" value={createdSpaceId} />
+          <p class="md:col-span-2 text-sm text-moss-700">Step 2 of 5: Add your first area.</p>
+          <label class="text-sm">Area name <input class="mt-1 w-full rounded-md" name="areaName" required /></label>
+          <label class="text-sm">Type <input class="mt-1 w-full rounded-md" name="areaType" placeholder="raised bed, border, container" required /></label>
+          <label class="text-sm">Square feet <input class="mt-1 w-full rounded-md" name="sqft" type="number" min="1" required /></label>
+          <label class="text-sm">Sun
+            <select class="mt-1 w-full rounded-md" name="sun">
+              <option value="full_sun">Full sun</option>
+              <option value="part_sun">Part sun</option>
+              <option value="shade">Shade</option>
+            </select>
+          </label>
+          <label class="text-sm md:col-span-2">Notes <textarea class="mt-1 w-full rounded-md" name="notes"></textarea></label>
+          <button class="w-fit rounded-md bg-moss-700 px-4 py-2 text-sm text-white" type="submit">Finish Step 2</button>
+        </form>
+      )}
+    </div>
+  </AppShell>
+</BaseLayout>

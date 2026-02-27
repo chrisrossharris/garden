@@ -1,0 +1,31 @@
+---
+import BaseLayout from '@/layouts/BaseLayout.astro';
+---
+
+<BaseLayout title="Pricing | Garden OS">
+  <div class="space-y-6">
+    <h1 class="font-serif text-4xl text-moss-800">Pricing</h1>
+    <div class="grid gap-4 md:grid-cols-4">
+      <article class="card">
+        <h2 class="font-semibold">Blueprint</h2>
+        <p class="mt-1 text-2xl">$79 one-time</p>
+        <p class="mt-2 text-sm text-moss-700">PDF with areas, plantings, spacing quantities, and monthly timeline.</p>
+      </article>
+      <article class="card">
+        <h2 class="font-semibold">Basic</h2>
+        <p class="mt-1 text-2xl">$12/mo</p>
+        <p class="mt-2 text-sm text-moss-700">Planner + in-app timeline. Optional email digest off by default.</p>
+      </article>
+      <article class="card border-moss-300">
+        <h2 class="font-semibold">Plus</h2>
+        <p class="mt-1 text-2xl">$24/mo</p>
+        <p class="mt-2 text-sm text-moss-700">Email reminders for due tasks and season transitions.</p>
+      </article>
+      <article class="card border-moss-500">
+        <h2 class="font-semibold">Ultra</h2>
+        <p class="mt-1 text-2xl">$39/mo</p>
+        <p class="mt-2 text-sm text-moss-700">Weekly focus dashboard, richer notes, and smart warnings.</p>
+      </article>
+    </div>
+  </div>
+</BaseLayout>

@@ -44,6 +44,7 @@ Set these in Netlify and locally (`.env`):
 - `EMAIL_PROVIDER_KEY`, `EMAIL_FROM`
 - `STORAGE_BUCKET`, `STORAGE_PUBLIC_BASE_URL`
 - `APP_URL`
+- `OPENAI_API_KEY` (optional; if missing, Garden Coach uses rule-based fallback)
 
 ## Local Setup
 
@@ -107,4 +108,7 @@ Engine output includes `due_start`, `due_end`, and midpoint `due_date`.
 - External zone/frost providers are pluggable; current service stubs include expected shape and fallback heuristics.
 - Email uses Resend API format by default in `src/lib/services/email.ts`.
 - Blob storage uses `@netlify/blobs` for public PDF URL persistence.
+- Bed layout persistence requires migration `003_layout_allocations.sql`.
+- Timeline includes `Auto-plan next 14 days` (no AI key required).
+- AI Coach endpoint is `/api/ai/coach`; without `OPENAI_API_KEY`, it returns deterministic local guidance.
 # garden

@@ -1,0 +1,68 @@
+---
+import { SignedIn, SignedOut, UserButton } from '@clerk/astro/components';
+import '../styles.css';
+
+const { title = 'Garden OS' } = Astro.props;
+---
+
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width" />
+    <title>{title}</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600&family=Instrument+Sans:wght@400;500;600;700&display=swap"
+      rel="stylesheet"
+    />
+    <script is:inline>
+      (() => {
+        const stored = localStorage.getItem('garden-theme');
+        const systemDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+        const theme = stored ?? (systemDark ? 'dark' : 'light');
+        document.documentElement.setAttribute('data-theme', theme);
+      })();
+    </script>
+  </head>
+  <body>
+    <header class="theme-header border-b backdrop-blur">
+      <div class="mx-auto flex max-w-6xl items-center justify-between px-6 py-4">
+        <a href="/" class="theme-brand font-serif text-2xl">Garden OS</a>
+        <nav class="flex items-center gap-5 text-sm">
+          <a href="/pricing" class="theme-link">Pricing</a>
+          <button id="theme-toggle" type="button" class="theme-toggle rounded-md px-3 py-1.5">Dark mode</button>
+          <SignedIn>
+            <a href="/app" class="theme-link">App</a>
+            <UserButton />
+          </SignedIn>
+          <SignedOut>
+            <a href="/sign-in" class="theme-toggle rounded-md px-3 py-1.5">Sign in</a>
+          </SignedOut>
+        </nav>
+      </div>
+    </header>
+    <main class="mx-auto max-w-6xl px-6 py-8">
+      <slot />
+    </main>
+    <script is:inline>
+      (() => {
+        const btn = document.getElementById('theme-toggle');
+        if (!btn) return;
+        const root = document.documentElement;
+        const syncLabel = () => {
+          const isDark = root.getAttribute('data-theme') === 'dark';
+          btn.textContent = isDark ? 'Light mode' : 'Dark mode';
+        };
+        btn.addEventListener('click', () => {
+          const isDark = root.getAttribute('data-theme') === 'dark';
+          const next = isDark ? 'light' : 'dark';
+          root.setAttribute('data-theme', next);
+          localStorage.setItem('garden-theme', next);
+          syncLabel();
+        });
+        syncLabel();
+      })();
+    </script>
+  </body>
+</html>

@@ -1,0 +1,418 @@
+---
+import dayjs from 'dayjs';
+import BaseLayout from '@/layouts/BaseLayout.astro';
+import AppShell from '@/components/AppShell.astro';
+import { requireAppUser } from '@/lib/auth';
+import { addPlanting, estimateCapacity, getPlanForSpace, listPlants } from '@/lib/services/planner';
+import { listAreas, listSpaces } from '@/lib/services/spaces';
+import { getLocationProfile } from '@/lib/services/location';
+import { one } from '@/lib/db/client';
+
+const appUser = await requireAppUser(Astro.locals);
+if (!appUser) return Astro.redirect('/');
+
+const params = Astro.url.searchParams;
+const search = params.get('q') ?? '';
+const category = params.get('category') ?? '';
+const sun = (params.get('sun') ?? '') as 'full_sun' | 'part_sun' | 'shade' | '';
+const focus = params.get('focus') ?? '';
+const requestedSpaceId = params.get('space') ?? '';
+const added = params.get('added') === '1';
+const healthyOnly = params.get('healthy') === '1';
+
+const spaces = await listSpaces(appUser.id);
+const selectedSpace = spaces.find((s) => s.id === requestedSpaceId) ?? spaces[0] ?? null;
+const selectedSpaceId = selectedSpace?.id ?? '';
+const areas = selectedSpace ? await listAreas(selectedSpace.id) : [];
+const selectedPlan = selectedSpace ? await getPlanForSpace(selectedSpace.id) : [];
+
+if (Astro.request.method === 'POST') {
+  const form = await Astro.request.formData();
+  const action = String(form.get('action') ?? '');
+  if (action === 'quick-add') {
+    const areaId = String(form.get('areaId') ?? '');
+    const plantId = String(form.get('plantId') ?? '');
+    const quantity = Math.max(1, Number(form.get('quantity') ?? 1));
+
+    const ownedArea = await one<{ id: string }>(
+      `SELECT ga.id
+       FROM garden_areas ga
+       JOIN garden_spaces gs ON gs.id = ga.garden_space_id
+       WHERE ga.id = $1 AND gs.user_id = $2`,
+      [areaId, appUser.id]
+    );
+
+    if (ownedArea && plantId) {
+      await addPlanting({ areaId, plantId, quantity, notes: 'Quick add from library' });
+    }
+
+    return Astro.redirect(`/app/library?${String(form.get('returnQuery') ?? '')}`);
+  }
+}
+
+const plants = await listPlants({
+  search: search || undefined,
+  category: category || undefined,
+  sun: sun || undefined
+});
+
+const primarySpace = spaces[0] ?? null;
+const profile = primarySpace ? await getLocationProfile(primarySpace.zip) : null;
+const areaStats = areas.map((area) => {
+  const rows = selectedPlan.filter((x) => x.area_id === area.id && x.quantity && x.spacing_inches);
+  const usedSqInches = rows.reduce((sum, row) => sum + (row.quantity ?? 0) * (row.spacing_inches ?? 0) * (row.spacing_inches ?? 0), 0);
+  const totalSqInches = Number(area.sqft) * 144;
+  const occupancyPct = totalSqInches > 0 ? Math.round((usedSqInches / totalSqInches) * 100) : 0;
+  const remainingPct = Math.max(0, 100 - occupancyPct);
+  const dominantCapacity = Math.max(
+    0,
+    ...rows.map((row) => estimateCapacity(Number(area.sqft), row.spacing_inches ?? 1))
+  );
+  return {
+    id: area.id,
+    name: area.name,
+    sqft: Number(area.sqft),
+    usedSqInches,
+    totalSqInches,
+    occupancyPct: Math.max(0, Math.min(100, occupancyPct)),
+    remainingPct,
+    dominantCapacity,
+    risk: occupancyPct > 90 ? 'high' : occupancyPct >= 70 ? 'medium' : 'low'
+  };
+});
+areaStats.sort((a, b) => b.occupancyPct - a.occupancyPct);
+const visibleAreaStats = healthyOnly ? areaStats.filter((a) => a.occupancyPct < 70) : areaStats;
+const allowedAreaIds = new Set(visibleAreaStats.map((a) => a.id));
+const areaStatsMap = Object.fromEntries(
+  visibleAreaStats.map((s) => [
+    s.id,
+    {
+      name: s.name,
+      usedSqInches: s.usedSqInches,
+      totalSqInches: s.totalSqInches,
+      occupancyPct: s.occupancyPct,
+      risk: s.risk
+    }
+  ])
+);
+
+const now = dayjs();
+const lastFrostMid = profile
+  ? dayjs(profile.last_frost_start).add(Math.floor(dayjs(profile.last_frost_end).diff(dayjs(profile.last_frost_start), 'day') / 2), 'day')
+  : null;
+const firstFrostMid = profile
+  ? dayjs(profile.first_frost_start).add(Math.floor(dayjs(profile.first_frost_end).diff(dayjs(profile.first_frost_start), 'day') / 2), 'day')
+  : null;
+
+const companionGood = new Set([
+  ['Tomato', 'Purple Coneflower'].sort().join('|'),
+  ['Cucumber', 'Purple Coneflower'].sort().join('|'),
+  ['Bell Pepper', 'Purple Coneflower'].sort().join('|'),
+  ['Knock Out Rose', 'Purple Coneflower'].sort().join('|')
+]);
+const companionCaution = new Set([
+  ['Tomato', 'Cucumber'].sort().join('|')
+]);
+
+function seasonWindowForPlant(name: string) {
+  if (!lastFrostMid || !firstFrostMid) return null;
+  if (name === 'Tomato') {
+    return {
+      label: 'Start indoors',
+      start: lastFrostMid.subtract(8, 'week'),
+      end: lastFrostMid.subtract(6, 'week')
+    };
+  }
+  if (name === 'Bell Pepper') {
+    return {
+      label: 'Start indoors',
+      start: lastFrostMid.subtract(10, 'week'),
+      end: lastFrostMid.subtract(8, 'week')
+    };
+  }
+  if (name === 'Cucumber') {
+    return {
+      label: 'Direct sow outside',
+      start: lastFrostMid.add(1, 'week'),
+      end: lastFrostMid.add(2, 'week')
+    };
+  }
+  if (name === 'Purple Coneflower') {
+    return {
+      label: 'Transplant or sow',
+      start: lastFrostMid.subtract(1, 'week'),
+      end: lastFrostMid.add(4, 'week')
+    };
+  }
+  if (name === 'Knock Out Rose') {
+    return {
+      label: 'Best planting window',
+      start: lastFrostMid.subtract(2, 'week'),
+      end: lastFrostMid.add(6, 'week')
+    };
+  }
+  return {
+    label: 'Main season window',
+    start: lastFrostMid,
+    end: firstFrostMid.subtract(8, 'week')
+  };
+}
+
+function windowStatus(start: dayjs.Dayjs, end: dayjs.Dayjs) {
+  if (now.isAfter(end, 'day')) return 'passed';
+  if (now.isBefore(start, 'day')) return 'upcoming';
+  return 'now';
+}
+
+function pairKey(a: string, b: string) {
+  return [a, b].sort().join('|');
+}
+
+const enriched = plants.map((p) => {
+  const window = seasonWindowForPlant(p.common_name);
+  const status = window ? windowStatus(window.start, window.end) : null;
+  const relation =
+    focus && focus !== p.common_name
+      ? companionGood.has(pairKey(focus, p.common_name))
+        ? 'good'
+        : companionCaution.has(pairKey(focus, p.common_name))
+          ? 'caution'
+          : 'neutral'
+      : null;
+
+  return { ...p, window, status, relation };
+});
+---
+
+<BaseLayout title="Plant Library | Garden OS">
+  <AppShell title="Plant Library">
+    <section class="card space-y-4">
+      <div class="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h2 class="font-serif text-2xl text-moss-800">Discover plants by season, sun, and companions</h2>
+          {profile ? (
+            <p class="mt-1 text-sm text-moss-700">
+              Using ZIP {profile.zip}, zone {profile.zone}. Last frost window {profile.last_frost_start} to {profile.last_frost_end}.
+            </p>
+          ) : (
+            <p class="mt-1 text-sm text-moss-700">Add a space with ZIP to unlock local timing hints.</p>
+          )}
+        </div>
+        <a class="btn-outline rounded-md px-3 py-2 text-sm" href="/app/spaces/new">Add or update a space</a>
+      </div>
+
+      <form class="grid gap-3 md:grid-cols-6">
+        <input class="rounded-md" type="text" name="q" value={search} placeholder="Search plants" />
+        <input class="rounded-md" type="text" name="category" value={category} placeholder="Category" />
+        <select class="rounded-md" name="sun">
+          <option value="">Any Sun</option>
+          <option value="full_sun" selected={sun==='full_sun'}>Full Sun</option>
+          <option value="part_sun" selected={sun==='part_sun'}>Part Sun</option>
+          <option value="shade" selected={sun==='shade'}>Shade</option>
+        </select>
+        <input class="rounded-md" type="text" name="focus" value={focus} placeholder="Companion focus (e.g. Tomato)" />
+        <select class="rounded-md" name="space" disabled={spaces.length === 0}>
+          {spaces.length === 0 ? (
+            <option value="">No spaces yet</option>
+          ) : (
+            spaces.map((s) => <option value={s.id} selected={selectedSpaceId === s.id}>{s.name}</option>)
+          )}
+        </select>
+        <button class="btn-primary rounded-md px-4 py-2 text-sm" type="submit">Filter</button>
+      </form>
+      <div class="flex items-center gap-2">
+        <a
+          class={`btn-outline rounded-md px-3 py-1.5 text-xs ${healthyOnly ? 'border-emerald-500 text-emerald-700' : ''}`}
+          href={`/app/library?${new URLSearchParams({
+            ...(search ? { q: search } : {}),
+            ...(category ? { category } : {}),
+            ...(sun ? { sun } : {}),
+            ...(focus ? { focus } : {}),
+            ...(selectedSpaceId ? { space: selectedSpaceId } : {}),
+            healthy: healthyOnly ? '0' : '1'
+          }).toString()}`}
+        >
+          {healthyOnly ? 'Showing: Healthy Beds Only' : 'Show only beds with healthy space'}
+        </a>
+      </div>
+
+      {added && (
+        <p class="rounded-md border border-emerald-200 bg-emerald-100 px-3 py-2 text-sm text-emerald-800">
+          Planting added to your selected bed.
+        </p>
+      )}
+
+      <div class="grid gap-4 xl:grid-cols-[minmax(0,1fr)_320px]">
+        <div class="grid gap-3 md:grid-cols-2">
+          {enriched.map((p) => (
+            <article class="rounded-xl border border-moss-100 bg-[var(--surface-strong)] p-4">
+            <div class="flex items-start justify-between gap-2">
+              <div>
+                <h3 class="text-xl font-semibold text-moss-800">{p.common_name}</h3>
+                <p class="text-xs text-moss-600">{p.category} · {p.sun.replace('_', ' ')} · spacing {p.spacing_inches}"</p>
+              </div>
+              {p.is_native && <span class="rounded-full border border-emerald-200 bg-emerald-100 px-2 py-0.5 text-xs text-emerald-800">Native</span>}
+            </div>
+
+            {p.notes && <p class="mt-2 text-sm text-moss-700">{p.notes}</p>}
+
+            {p.window && (
+              <div class="mt-3 rounded-md border border-moss-100 bg-[var(--surface)] px-3 py-2">
+                <p class="text-[11px] uppercase tracking-wide text-moss-600">{p.window.label}</p>
+                <p class="mt-1 text-sm font-medium text-moss-800">
+                  {p.window.start.format('MMM D')} - {p.window.end.format('MMM D')}
+                </p>
+                <p class={`mt-1 text-xs ${
+                  p.status === 'now'
+                    ? 'text-emerald-700'
+                    : p.status === 'upcoming'
+                      ? 'text-amber-700'
+                      : 'text-zinc-600'
+                }`}>
+                  {p.status === 'now' ? 'Do this now' : p.status === 'upcoming' ? 'Upcoming window' : 'Window passed'}
+                </p>
+              </div>
+            )}
+
+            {focus && focus !== p.common_name && (
+              <div class="mt-3">
+                {p.relation === 'good' && (
+                  <p class="rounded-md border border-emerald-200 bg-emerald-100 px-2 py-1 text-xs text-emerald-800">
+                    Good companion with {focus}
+                  </p>
+                )}
+                {p.relation === 'caution' && (
+                  <p class="rounded-md border border-amber-200 bg-amber-100 px-2 py-1 text-xs text-amber-800">
+                    Use caution when paired with {focus}
+                  </p>
+                )}
+                {p.relation === 'neutral' && (
+                  <p class="rounded-md border border-zinc-200 bg-zinc-100 px-2 py-1 text-xs text-zinc-700">
+                    No strong pairing signal with {focus}
+                  </p>
+                )}
+              </div>
+            )}
+
+            <form method="POST" class="quick-add-form mt-3 grid gap-2" data-spacing={p.spacing_inches}>
+              <input type="hidden" name="action" value="quick-add" />
+              <input type="hidden" name="plantId" value={p.id} />
+              <input
+                type="hidden"
+                name="returnQuery"
+                value={new URLSearchParams({
+                  ...(search ? { q: search } : {}),
+                  ...(category ? { category } : {}),
+                  ...(sun ? { sun } : {}),
+                  ...(focus ? { focus } : {}),
+                  ...(selectedSpaceId ? { space: selectedSpaceId } : {}),
+                  ...(healthyOnly ? { healthy: '1' } : {}),
+                  added: '1'
+                }).toString()}
+              />
+              <div class="grid grid-cols-3 gap-2">
+                <select class="col-span-2 rounded-md" name="areaId" required disabled={areas.length === 0}>
+                  {areas.length === 0 || visibleAreaStats.length === 0 ? (
+                    <option value="">{areas.length === 0 ? 'No beds yet' : 'No healthy-space beds'}</option>
+                  ) : (
+                    areas
+                      .filter((a) => allowedAreaIds.has(a.id))
+                      .map((a) => <option value={a.id}>{a.name}</option>)
+                  )}
+                </select>
+                <input class="rounded-md" type="number" name="quantity" min="1" value="1" required />
+              </div>
+              <button class="btn-outline rounded-md px-3 py-1.5 text-xs" type="submit" disabled={areas.length === 0 || visibleAreaStats.length === 0}>
+                {areas.length === 0 ? 'Create a bed first' : visibleAreaStats.length === 0 ? 'No healthy beds available' : 'Add to Bed'}
+              </button>
+              <p class="text-xs text-moss-600" data-projection>
+                {areas.length === 0 ? 'No bed selected yet.' : 'Projected bed use updates when you change area/quantity.'}
+              </p>
+            </form>
+          </article>
+          ))}
+        </div>
+
+        <aside class="space-y-3">
+          <section class="card sticky top-4 space-y-3">
+            <div>
+              <h3 class="font-serif text-2xl text-moss-800">Bed Capacity</h3>
+              <p class="text-xs text-moss-600">
+                {selectedSpace ? `Space: ${selectedSpace.name}` : 'Select a space to see live bed usage.'}
+              </p>
+            </div>
+            {visibleAreaStats.length === 0 ? (
+              <p class="text-sm text-moss-700">No beds found. Create areas first, then quick-add from library.</p>
+            ) : (
+              <ul class="space-y-2">
+                {visibleAreaStats.map((stat) => (
+                  <li class="rounded-md border border-moss-100 px-3 py-2">
+                    <div class="flex items-center justify-between gap-2">
+                      <p class="text-sm font-medium text-moss-800">{stat.name}</p>
+                      <p class="text-xs text-moss-600">{stat.sqft.toFixed(2)} sqft</p>
+                    </div>
+                    <div class="mt-2 h-2 overflow-hidden rounded-full border border-moss-200 bg-[var(--surface)]">
+                      <div
+                        class={`h-full ${
+                          stat.risk === 'high'
+                            ? 'bg-red-500'
+                            : stat.risk === 'medium'
+                              ? 'bg-amber-500'
+                              : 'bg-emerald-500'
+                        }`}
+                        style={`width:${stat.occupancyPct}%`}
+                      ></div>
+                    </div>
+                    <p class="mt-1 text-xs text-moss-600">
+                      {stat.occupancyPct}% used · {stat.remainingPct}% open
+                    </p>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </section>
+        </aside>
+      </div>
+
+      <script is:inline id="area-stats-data" type="application/json" set:html={JSON.stringify(areaStatsMap)}></script>
+      <script is:inline>
+        (() => {
+          const areaStatsEl = document.getElementById('area-stats-data');
+          const areaStats = areaStatsEl?.textContent ? JSON.parse(areaStatsEl.textContent) : {};
+          const forms = document.querySelectorAll('.quick-add-form');
+          const clamp = (n, min, max) => Math.max(min, Math.min(max, n));
+
+          const renderProjection = (form) => {
+            const spacing = Number(form.getAttribute('data-spacing') || '0');
+            const areaSelect = form.querySelector('select[name=\"areaId\"]');
+            const qtyInput = form.querySelector('input[name=\"quantity\"]');
+            const projection = form.querySelector('[data-projection]');
+            if (!(areaSelect instanceof HTMLSelectElement) || !(qtyInput instanceof HTMLInputElement) || !(projection instanceof HTMLElement)) return;
+
+            const area = areaStats[areaSelect.value];
+            if (!area || spacing <= 0) {
+              projection.textContent = 'Select a bed to preview occupancy.';
+              return;
+            }
+
+            const qty = Math.max(1, Number(qtyInput.value || '1'));
+            const addSqInches = qty * spacing * spacing;
+            const currentPct = area.totalSqInches > 0 ? (area.usedSqInches / area.totalSqInches) * 100 : 0;
+            const projectedPct = area.totalSqInches > 0 ? ((area.usedSqInches + addSqInches) / area.totalSqInches) * 100 : 0;
+            const delta = projectedPct - currentPct;
+            const p = clamp(Math.round(projectedPct), 0, 999);
+            const d = Math.max(0, Math.round(delta));
+            const riskLabel = p > 90 ? 'High crowding risk' : p >= 70 ? 'Getting tight' : 'Healthy space';
+            projection.textContent = `Projected ${area.name} use: ${p}% (${d > 0 ? '+' + d : '+0'}%) - ${riskLabel}`;
+          };
+
+          forms.forEach((form) => {
+            renderProjection(form);
+            form.addEventListener('change', () => renderProjection(form));
+            form.addEventListener('input', () => renderProjection(form));
+          });
+        })();
+      </script>
+    </section>
+  </AppShell>
+</BaseLayout>
