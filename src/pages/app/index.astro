@@ -25,7 +25,10 @@ if (Astro.request.method === 'POST') {
       `SELECT t.id
        FROM tasks t
        JOIN garden_spaces gs ON gs.id = t.garden_space_id
-       WHERE t.id = $1 AND gs.id = $2 AND gs.user_id = $3`,
+       LEFT JOIN space_members sm ON sm.garden_space_id = gs.id AND sm.user_id = $3
+       WHERE t.id = $1
+         AND gs.id = $2
+         AND (gs.user_id = $3 OR sm.role::text IN ('OWNER','EDITOR'))`,
       [taskId, spaceId, appUser.id]
     );
     if (owned) {
@@ -40,7 +43,10 @@ if (Astro.request.method === 'POST') {
       `SELECT t.id
        FROM tasks t
        JOIN garden_spaces gs ON gs.id = t.garden_space_id
-       WHERE t.id = $1 AND gs.id = $2 AND gs.user_id = $3`,
+       LEFT JOIN space_members sm ON sm.garden_space_id = gs.id AND sm.user_id = $3
+       WHERE t.id = $1
+         AND gs.id = $2
+         AND (gs.user_id = $3 OR sm.role::text IN ('OWNER','EDITOR'))`,
       [taskId, spaceId, appUser.id]
     );
     if (owned) {
@@ -228,7 +234,7 @@ if (spaces.length === 0) {
             <li class="rounded-lg border border-moss-100 px-4 py-3">
               <div>
                 <p class="font-medium">{space.name}</p>
-                <p class="text-xs text-moss-600">ZIP {space.zip} · {space.total_sqft} sqft</p>
+                <p class="text-xs text-moss-600">ZIP {space.zip} · {space.total_sqft} sqft · {space.access_role}</p>
               </div>
               <div class="mt-3 flex flex-wrap gap-2 text-xs">
                 <a class="btn-outline rounded-md px-2.5 py-1.5" href={`/app/spaces/${space.id}`}>Overview</a>

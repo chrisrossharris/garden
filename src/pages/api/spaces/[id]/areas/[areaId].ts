@@ -3,13 +3,17 @@ import { one } from '@/lib/db/client';
 import { ensureUserByClerkId } from '@/lib/services/users';
 import { refreshSpaceSqft, updateAreaSqft } from '@/lib/services/spaces';
 
-async function requireOwnedSpace(spaceId: string, clerkUserId: string) {
+async function getSpaceAccess(spaceId: string, clerkUserId: string) {
   const appUser = await ensureUserByClerkId(clerkUserId);
-  const owned = await one<{ id: string }>(
-    `SELECT id FROM garden_spaces WHERE id = $1 AND user_id = $2`,
+  const access = await one<{ id: string; role: 'OWNER' | 'EDITOR' | 'VIEWER' }>(
+    `SELECT gs.id, CASE WHEN gs.user_id = $2 THEN 'OWNER' ELSE sm.role::text END AS role
+     FROM garden_spaces gs
+     LEFT JOIN space_members sm ON sm.garden_space_id = gs.id AND sm.user_id = $2
+     WHERE gs.id = $1
+       AND (gs.user_id = $2 OR sm.user_id = $2)`,
     [spaceId, appUser.id]
   );
-  return { appUser, owned: !!owned };
+  return { appUser, role: access?.role ?? null };
 }
 
 export const POST: APIRoute = async ({ params, request, locals }) => {
@@ -20,8 +24,9 @@ export const POST: APIRoute = async ({ params, request, locals }) => {
   const areaId = params.areaId;
   if (!spaceId || !areaId) return new Response('Missing route params', { status: 400 });
 
-  const { owned } = await requireOwnedSpace(spaceId, auth.userId);
-  if (!owned) return new Response('Not found', { status: 404 });
+  const { role, appUser } = await getSpaceAccess(spaceId, auth.userId);
+  if (!role) return new Response('Not found', { status: 404 });
+  if (!['OWNER', 'EDITOR'].includes(role)) return new Response('Forbidden', { status: 403 });
 
   const body = (await request.json()) as { sqft?: number };
   const sqft = Number(body.sqft ?? 0);
@@ -33,9 +38,11 @@ export const POST: APIRoute = async ({ params, request, locals }) => {
     `SELECT ga.id
      FROM garden_areas ga
      JOIN garden_spaces gs ON gs.id = ga.garden_space_id
-     JOIN users u ON u.id = gs.user_id
-     WHERE ga.id = $1 AND gs.id = $2 AND u.clerk_user_id = $3`,
-    [areaId, spaceId, auth.userId]
+     LEFT JOIN space_members sm ON sm.garden_space_id = gs.id AND sm.user_id = $3
+     WHERE ga.id = $1
+       AND gs.id = $2
+       AND (gs.user_id = $3 OR (sm.user_id = $3 AND sm.role::text IN ('OWNER','EDITOR')))`,
+    [areaId, spaceId, appUser.id]
   );
   if (!areaOwned) return new Response('Area not found', { status: 404 });
 
@@ -47,4 +54,3 @@ export const POST: APIRoute = async ({ params, request, locals }) => {
     headers: { 'Content-Type': 'application/json' }
   });
 };
-

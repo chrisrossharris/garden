@@ -2,7 +2,16 @@
 import BaseLayout from '@/layouts/BaseLayout.astro';
 import AppShell from '@/components/AppShell.astro';
 import { requireAppUser } from '@/lib/auth';
-import { createArea, getSpace, listAreas, refreshSpaceSqft, updateArea } from '@/lib/services/spaces';
+import {
+  addSpaceMemberByClerkId,
+  createArea,
+  getSpace,
+  listAreas,
+  listSpaceMembers,
+  refreshSpaceSqft,
+  removeSpaceMember,
+  updateArea
+} from '@/lib/services/spaces';
 import { getLocationProfile } from '@/lib/services/location';
 
 const appUser = await requireAppUser(Astro.locals);
@@ -11,11 +20,13 @@ if (!appUser) return Astro.redirect('/');
 const id = Astro.params.id as string;
 const space = await getSpace(id, appUser.id);
 if (!space) return Astro.redirect('/app');
+const canEditSpace = space.access_role === 'OWNER' || space.access_role === 'EDITOR';
+const isOwner = space.access_role === 'OWNER';
 
 if (Astro.request.method === 'POST') {
   const form = await Astro.request.formData();
   const action = String(form.get('action') ?? '');
-  if (action === 'add-area') {
+  if (action === 'add-area' && canEditSpace) {
     await createArea({
       spaceId: id,
       name: String(form.get('name') ?? 'New Bed'),
@@ -27,7 +38,7 @@ if (Astro.request.method === 'POST') {
     await refreshSpaceSqft(id);
     return Astro.redirect(`/app/spaces/${id}`);
   }
-  if (action === 'update-area') {
+  if (action === 'update-area' && canEditSpace) {
     await updateArea({
       spaceId: id,
       areaId: String(form.get('area_id') ?? ''),
@@ -40,10 +51,33 @@ if (Astro.request.method === 'POST') {
     await refreshSpaceSqft(id);
     return Astro.redirect(`/app/spaces/${id}`);
   }
+  if (action === 'add-member' && isOwner) {
+    try {
+      await addSpaceMemberByClerkId({
+        spaceId: id,
+        ownerUserId: appUser.id,
+        targetClerkUserId: String(form.get('target_clerk_user_id') ?? '').trim(),
+        role: String(form.get('role') ?? 'EDITOR') as 'EDITOR' | 'VIEWER'
+      });
+      return Astro.redirect(`/app/spaces/${id}?shared=1`);
+    } catch (error) {
+      return Astro.redirect(`/app/spaces/${id}?share_error=${encodeURIComponent((error as Error).message)}`);
+    }
+  }
+  if (action === 'remove-member' && isOwner) {
+    await removeSpaceMember({
+      spaceId: id,
+      ownerUserId: appUser.id,
+      memberUserId: String(form.get('member_user_id') ?? '')
+    });
+    return Astro.redirect(`/app/spaces/${id}?shared=1`);
+  }
 }
 
-const areas = await listAreas(id);
+const areas = await listAreas(id, appUser.id);
+const members = await listSpaceMembers(id, appUser.id);
 const profile = await getLocationProfile(space.zip);
+const shareError = Astro.url.searchParams.get('share_error');
 
 const dateFmt = new Intl.DateTimeFormat('en-US', {
   month: 'short',
@@ -130,6 +164,7 @@ const taskWindows = [
             <h2 class="font-semibold text-moss-800">Area List</h2>
             <p class="text-xs text-moss-600">{areas.length} areas · {totalSqft.toFixed(2)} total sqft</p>
           </div>
+          <span class="rounded-full border border-moss-200 px-2 py-0.5 text-xs text-moss-700">{space.access_role}</span>
         </div>
 
         <ul class="space-y-2">
@@ -140,6 +175,7 @@ const taskWindows = [
                 <span class="rounded-full border border-moss-200 px-2 py-0.5 text-xs text-moss-600">{area.type}</span>
               </div>
               {area.notes && <p class="mt-1 text-xs text-moss-600">{area.notes}</p>}
+              {canEditSpace && (
               <details class="mt-2 rounded-md border border-moss-100 bg-[var(--surface-strong)] p-2">
                 <summary class="cursor-pointer text-xs font-medium text-moss-700">Edit area</summary>
                 <form method="POST" class="mt-2 grid gap-2 md:grid-cols-2">
@@ -163,10 +199,12 @@ const taskWindows = [
                   <button class="btn-primary w-fit rounded-md px-3 py-1.5 text-xs" type="submit">Save area</button>
                 </form>
               </details>
+              )}
             </li>
           ))}
         </ul>
 
+        {canEditSpace && (
         <details class="rounded-md border border-moss-100 p-3">
           <summary class="cursor-pointer text-sm font-medium text-moss-800">Add another bed or area</summary>
           <form method="POST" class="mt-3 grid gap-3 md:grid-cols-2">
@@ -185,6 +223,54 @@ const taskWindows = [
             <button class="btn-primary w-fit rounded-md px-3 py-2 text-sm" type="submit">Add Area</button>
           </form>
         </details>
+        )}
+
+        <section class="rounded-md border border-moss-100 p-3 space-y-3">
+          <div class="flex items-center justify-between gap-2">
+            <h3 class="font-semibold text-moss-800">Shared Access</h3>
+            <span class="text-xs text-moss-600">{members.length} member(s)</span>
+          </div>
+
+          {shareError && <p class="text-xs text-red-700">{shareError}</p>}
+
+          <ul class="space-y-2 text-sm">
+            {members.map((m) => (
+              <li class="rounded-md border border-moss-100 px-3 py-2 flex items-center justify-between gap-2">
+                <div>
+                  <p class="font-medium text-moss-800">{m.email ?? m.clerk_user_id}</p>
+                  <p class="text-xs text-moss-600">{m.role}</p>
+                </div>
+                {isOwner && m.role !== 'OWNER' && (
+                  <form method="POST">
+                    <input type="hidden" name="action" value="remove-member" />
+                    <input type="hidden" name="member_user_id" value={m.user_id} />
+                    <button class="btn-outline rounded-md px-2 py-1 text-xs" type="submit">Remove</button>
+                  </form>
+                )}
+              </li>
+            ))}
+          </ul>
+
+          {isOwner && (
+            <details class="rounded-md border border-moss-100 bg-[var(--surface-strong)] p-2">
+              <summary class="cursor-pointer text-xs font-medium text-moss-700">Add member by Clerk user ID</summary>
+              <form method="POST" class="mt-2 grid gap-2 md:grid-cols-[1fr_auto_auto]">
+                <input type="hidden" name="action" value="add-member" />
+                <label class="text-xs">Clerk user ID
+                  <input class="mt-1 w-full rounded-md" name="target_clerk_user_id" placeholder="user_..." required />
+                </label>
+                <label class="text-xs">Role
+                  <select class="mt-1 rounded-md" name="role">
+                    <option value="EDITOR">Editor</option>
+                    <option value="VIEWER">Viewer</option>
+                  </select>
+                </label>
+                <button class="btn-primary rounded-md px-3 py-1.5 text-xs self-end" type="submit">Share</button>
+              </form>
+              <p class="mt-2 text-[11px] text-moss-600">Your wife can find her Clerk user ID in her account profile after signing up.</p>
+            </details>
+          )}
+        </section>
       </div>
       <div class="space-y-4">
         <div class="card space-y-4">

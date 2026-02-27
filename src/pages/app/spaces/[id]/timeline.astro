@@ -22,9 +22,11 @@ if (!appUser) return Astro.redirect('/');
 const id = Astro.params.id as string;
 const space = await getSpace(id, appUser.id);
 if (!space) return Astro.redirect('/app');
+const canEditSpace = space.access_role === 'OWNER' || space.access_role === 'EDITOR';
 const profile = await getLocationProfile(space.zip);
 
 if (Astro.request.method === 'POST') {
+  if (!canEditSpace) return Astro.redirect(`/app/spaces/${id}/timeline`);
   const form = await Astro.request.formData();
   const action = String(form.get('action'));
   const taskId = String(form.get('taskId') ?? '');
@@ -251,17 +253,18 @@ const weatherAdjustments = planningCandidates.flatMap((task) => {
       <div class="flex flex-wrap gap-2">
         <form method="POST">
           <input type="hidden" name="action" value="autoplan-14" />
-          <button class="btn-primary rounded-md px-3 py-1.5 text-xs" type="submit">Auto-plan next 14 days</button>
+          <button class="btn-primary rounded-md px-3 py-1.5 text-xs" type="submit" disabled={!canEditSpace}>Auto-plan next 14 days</button>
         </form>
         <form method="POST">
           <input type="hidden" name="action" value="complete-today" />
-          <button class="btn-primary rounded-md px-3 py-1.5 text-xs" type="submit" disabled={dueToday.length === 0}>Complete all due today</button>
+          <button class="btn-primary rounded-md px-3 py-1.5 text-xs" type="submit" disabled={dueToday.length === 0 || !canEditSpace}>Complete all due today</button>
         </form>
         <form method="POST">
           <input type="hidden" name="action" value="snooze-overdue" />
-          <button class="btn-outline rounded-md px-3 py-1.5 text-xs" type="submit" disabled={overdue.length === 0}>Snooze overdue +2d</button>
+          <button class="btn-outline rounded-md px-3 py-1.5 text-xs" type="submit" disabled={overdue.length === 0 || !canEditSpace}>Snooze overdue +2d</button>
         </form>
       </div>
+      {!canEditSpace && <p class="text-xs text-moss-600">Viewer access: timeline edits are disabled.</p>}
 
       {weatherAdjustments.length > 0 && (
         <div class="space-y-2 rounded-lg border border-moss-100 p-3">
@@ -276,7 +279,7 @@ const weatherAdjustments = planningCandidates.flatMap((task) => {
                   <input type="hidden" name="action" value="snooze-custom" />
                   <input type="hidden" name="taskId" value={adj.taskId} />
                   <input type="hidden" name="days" value={adj.delayDays} />
-                  <button class="btn-outline rounded-md px-2 py-1 text-xs" type="submit">Apply weather shift</button>
+                  <button class="btn-outline rounded-md px-2 py-1 text-xs" type="submit" disabled={!canEditSpace}>Apply weather shift</button>
                 </form>
               </li>
             ))}
@@ -298,8 +301,8 @@ const weatherAdjustments = planningCandidates.flatMap((task) => {
                 <p class="text-xs text-moss-600">Due {formatDue(t.due_date)}</p>
                 {t.instructions && <p class="mt-1 text-xs text-moss-700">{t.instructions}</p>}
                 <div class="mt-2 flex gap-2">
-                  <form method="POST"><input type="hidden" name="action" value="complete" /><input type="hidden" name="taskId" value={t.id} /><button class="btn-primary rounded-md px-2 py-1 text-xs">Complete</button></form>
-                  <form method="POST"><input type="hidden" name="action" value="snooze" /><input type="hidden" name="taskId" value={t.id} /><button class="btn-outline rounded-md px-2 py-1 text-xs">Snooze 3d</button></form>
+                  <form method="POST"><input type="hidden" name="action" value="complete" /><input type="hidden" name="taskId" value={t.id} /><button class="btn-primary rounded-md px-2 py-1 text-xs" disabled={!canEditSpace}>Complete</button></form>
+                  <form method="POST"><input type="hidden" name="action" value="snooze" /><input type="hidden" name="taskId" value={t.id} /><button class="btn-outline rounded-md px-2 py-1 text-xs" disabled={!canEditSpace}>Snooze 3d</button></form>
                 </div>
               </li>
             ))}
@@ -319,8 +322,8 @@ const weatherAdjustments = planningCandidates.flatMap((task) => {
                 <p class="text-xs text-moss-600">Due {formatDue(t.due_date)}</p>
                 {t.instructions && <p class="mt-1 text-xs text-moss-700">{t.instructions}</p>}
                 <div class="mt-2 flex gap-2">
-                  <form method="POST"><input type="hidden" name="action" value="complete" /><input type="hidden" name="taskId" value={t.id} /><button class="btn-primary rounded-md px-2 py-1 text-xs">Complete</button></form>
-                  <form method="POST"><input type="hidden" name="action" value="snooze" /><input type="hidden" name="taskId" value={t.id} /><button class="btn-outline rounded-md px-2 py-1 text-xs">Snooze 3d</button></form>
+                  <form method="POST"><input type="hidden" name="action" value="complete" /><input type="hidden" name="taskId" value={t.id} /><button class="btn-primary rounded-md px-2 py-1 text-xs" disabled={!canEditSpace}>Complete</button></form>
+                  <form method="POST"><input type="hidden" name="action" value="snooze" /><input type="hidden" name="taskId" value={t.id} /><button class="btn-outline rounded-md px-2 py-1 text-xs" disabled={!canEditSpace}>Snooze 3d</button></form>
                 </div>
               </li>
             ))}

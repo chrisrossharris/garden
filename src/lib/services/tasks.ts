@@ -142,7 +142,8 @@ export async function getDashboardTaskSummary(userId: string) {
       COUNT(*) FILTER (WHERE t.status = 'todo' AND t.due_date < CURRENT_DATE)::int AS overdue
      FROM tasks t
      JOIN garden_spaces gs ON gs.id = t.garden_space_id
-     WHERE gs.user_id = $1`,
+     LEFT JOIN space_members sm ON sm.garden_space_id = gs.id AND sm.user_id = $1
+     WHERE gs.user_id = $1 OR sm.user_id = $1`,
     [userId]
   );
 
@@ -155,7 +156,8 @@ export async function getDashboardTaskSummary(userId: string) {
     `SELECT gs.id AS space_id, gs.name AS space_name, t.title, t.due_date::text
      FROM tasks t
      JOIN garden_spaces gs ON gs.id = t.garden_space_id
-     WHERE gs.user_id = $1
+     LEFT JOIN space_members sm ON sm.garden_space_id = gs.id AND sm.user_id = $1
+     WHERE (gs.user_id = $1 OR sm.user_id = $1)
        AND t.status = 'todo'
        AND t.due_date >= CURRENT_DATE
      ORDER BY t.due_date ASC
@@ -297,7 +299,8 @@ export async function getWeeklyDigestData(userId: string) {
     `SELECT t.id AS task_id, gs.id AS space_id, gs.name AS space_name, t.title, t.due_date::text, t.instructions
      FROM tasks t
      JOIN garden_spaces gs ON gs.id = t.garden_space_id
-     WHERE gs.user_id = $1
+     LEFT JOIN space_members sm ON sm.garden_space_id = gs.id AND sm.user_id = $1
+     WHERE (gs.user_id = $1 OR sm.user_id = $1)
        AND t.status = 'todo'
        AND t.due_date <= CURRENT_DATE + interval '7 days'
      ORDER BY t.due_date ASC
@@ -326,7 +329,8 @@ export async function getWeeklyDigestData(userId: string) {
       lp.first_frost_end::text
      FROM garden_spaces gs
      JOIN location_profiles lp ON lp.zip = gs.zip
-     WHERE gs.user_id = $1
+     LEFT JOIN space_members sm ON sm.garden_space_id = gs.id AND sm.user_id = $1
+     WHERE gs.user_id = $1 OR sm.user_id = $1
      ORDER BY gs.created_at ASC
      LIMIT 1`,
     [userId]

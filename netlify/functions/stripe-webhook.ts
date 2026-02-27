@@ -6,6 +6,84 @@ import { generateBlueprintPdf } from '../../src/lib/services/pdf';
 
 const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET as string;
 
+async function getBlueprintRows(gardenSpaceId: string) {
+  try {
+    return await query<{
+      space_name: string;
+      zip: string;
+      zone: string;
+      last_frost_start: string;
+      last_frost_end: string;
+      area_name: string;
+      sqft: string;
+      sun_exposure: string;
+      plant_name: string | null;
+      quantity: number | null;
+      spacing_inches: number | null;
+      layout_zone: string | null;
+    }>(
+      `SELECT
+         gs.name AS space_name,
+         gs.zip,
+         lp.zone,
+         lp.last_frost_start::text,
+         lp.last_frost_end::text,
+         ga.name AS area_name,
+         ga.sqft::text,
+         ga.sun_exposure::text,
+         p.common_name AS plant_name,
+         gp.quantity,
+         p.spacing_inches,
+         gla.zone::text AS layout_zone
+       FROM garden_spaces gs
+       JOIN location_profiles lp ON lp.zip = gs.zip
+       LEFT JOIN garden_areas ga ON ga.garden_space_id = gs.id
+       LEFT JOIN garden_plantings gp ON gp.garden_area_id = ga.id
+       LEFT JOIN plants p ON p.id = gp.plant_id
+       LEFT JOIN garden_layout_allocations gla ON gla.garden_area_id = ga.id AND gla.plant_id = p.id
+       WHERE gs.id = $1`,
+      [gardenSpaceId]
+    );
+  } catch (error) {
+    if ((error as { code?: string }).code !== '42P01') throw error;
+    return query<{
+      space_name: string;
+      zip: string;
+      zone: string;
+      last_frost_start: string;
+      last_frost_end: string;
+      area_name: string;
+      sqft: string;
+      sun_exposure: string;
+      plant_name: string | null;
+      quantity: number | null;
+      spacing_inches: number | null;
+      layout_zone: string | null;
+    }>(
+      `SELECT
+         gs.name AS space_name,
+         gs.zip,
+         lp.zone,
+         lp.last_frost_start::text,
+         lp.last_frost_end::text,
+         ga.name AS area_name,
+         ga.sqft::text,
+         ga.sun_exposure::text,
+         p.common_name AS plant_name,
+         gp.quantity,
+         p.spacing_inches,
+         NULL::text AS layout_zone
+       FROM garden_spaces gs
+       JOIN location_profiles lp ON lp.zip = gs.zip
+       LEFT JOIN garden_areas ga ON ga.garden_space_id = gs.id
+       LEFT JOIN garden_plantings gp ON gp.garden_area_id = ga.id
+       LEFT JOIN plants p ON p.id = gp.plant_id
+       WHERE gs.id = $1`,
+      [gardenSpaceId]
+    );
+  }
+}
+
 export const handler: Handler = async (event) => {
   const sig = event.headers['stripe-signature'];
   if (!sig || !event.body) {
@@ -32,42 +110,7 @@ export const handler: Handler = async (event) => {
       );
 
       if (purchase) {
-        const rows = await query<{
-          space_name: string;
-          zip: string;
-          zone: string;
-          last_frost_start: string;
-          last_frost_end: string;
-          area_name: string;
-          sqft: string;
-          sun_exposure: string;
-          plant_name: string | null;
-          quantity: number | null;
-          spacing_inches: number | null;
-          layout_zone: string | null;
-        }>(
-          `SELECT
-             gs.name AS space_name,
-             gs.zip,
-             lp.zone,
-             lp.last_frost_start::text,
-             lp.last_frost_end::text,
-             ga.name AS area_name,
-             ga.sqft::text,
-             ga.sun_exposure::text,
-             p.common_name AS plant_name,
-             gp.quantity,
-             p.spacing_inches,
-             gla.zone::text AS layout_zone
-           FROM garden_spaces gs
-           JOIN location_profiles lp ON lp.zip = gs.zip
-           LEFT JOIN garden_areas ga ON ga.garden_space_id = gs.id
-           LEFT JOIN garden_plantings gp ON gp.garden_area_id = ga.id
-           LEFT JOIN plants p ON p.id = gp.plant_id
-           LEFT JOIN garden_layout_allocations gla ON gla.garden_area_id = ga.id AND gla.plant_id = p.id
-           WHERE gs.id = $1`,
-          [gardenSpaceId]
-        );
+        const rows = await getBlueprintRows(gardenSpaceId);
 
         if (rows.length > 0) {
           const areasMap = new Map<string, { name: string; sqft: string; sun: string }>();

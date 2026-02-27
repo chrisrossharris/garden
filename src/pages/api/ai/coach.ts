@@ -1,6 +1,7 @@
 import type { APIRoute } from 'astro';
 import { env } from '@/lib/env';
 import { one, query } from '@/lib/db/client';
+import { ensureUserByClerkId } from '@/lib/services/users';
 
 function fallbackAdvice(question: string, context: {
   spaceName: string;
@@ -31,6 +32,7 @@ export const POST: APIRoute = async ({ request, locals }) => {
   if (!body.spaceId || !body.question) {
     return new Response('spaceId and question are required', { status: 400 });
   }
+  const appUser = await ensureUserByClerkId(auth.userId);
 
   const space = await one<{
     id: string;
@@ -42,10 +44,16 @@ export const POST: APIRoute = async ({ request, locals }) => {
   }>(
     `SELECT gs.id, gs.name, gs.zip, lp.zone, lp.last_frost_start::text, lp.last_frost_end::text
      FROM garden_spaces gs
-     JOIN users u ON u.id = gs.user_id
      JOIN location_profiles lp ON lp.zip = gs.zip
-     WHERE gs.id = $1 AND u.clerk_user_id = $2`,
-    [body.spaceId, auth.userId]
+     WHERE gs.id = $1
+       AND EXISTS (
+         SELECT 1
+         FROM garden_spaces s2
+         LEFT JOIN space_members sm ON sm.garden_space_id = s2.id AND sm.user_id = $2
+         WHERE s2.id = gs.id
+           AND (s2.user_id = $2 OR sm.user_id = $2)
+       )`,
+    [body.spaceId, appUser.id]
   );
 
   if (!space) return new Response('Space not found', { status: 404 });

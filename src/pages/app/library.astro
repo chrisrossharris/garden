@@ -23,7 +23,7 @@ const healthyOnly = params.get('healthy') === '1';
 const spaces = await listSpaces(appUser.id);
 const selectedSpace = spaces.find((s) => s.id === requestedSpaceId) ?? spaces[0] ?? null;
 const selectedSpaceId = selectedSpace?.id ?? '';
-const areas = selectedSpace ? await listAreas(selectedSpace.id) : [];
+const areas = selectedSpace ? await listAreas(selectedSpace.id, appUser.id) : [];
 const selectedPlan = selectedSpace ? await getPlanForSpace(selectedSpace.id) : [];
 
 if (Astro.request.method === 'POST') {
@@ -38,7 +38,9 @@ if (Astro.request.method === 'POST') {
       `SELECT ga.id
        FROM garden_areas ga
        JOIN garden_spaces gs ON gs.id = ga.garden_space_id
-       WHERE ga.id = $1 AND gs.user_id = $2`,
+       LEFT JOIN space_members sm ON sm.garden_space_id = gs.id AND sm.user_id = $2
+       WHERE ga.id = $1
+         AND (gs.user_id = $2 OR (sm.user_id = $2 AND sm.role::text IN ('OWNER','EDITOR')))`,
       [areaId, appUser.id]
     );
 

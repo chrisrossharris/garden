@@ -119,3 +119,26 @@ export async function listLayoutAllocationsForSpace(spaceId: string) {
     throw error;
   }
 }
+
+export async function listAreaLayoutsForSpace(spaceId: string) {
+  try {
+    return await query<{
+      area_id: string;
+      x_pct: number;
+      y_pct: number;
+    }>(
+      `SELECT
+         garden_area_id AS area_id,
+         x_pct::float8 AS x_pct,
+         y_pct::float8 AS y_pct
+       FROM garden_area_layouts
+       WHERE garden_space_id = $1`,
+      [spaceId]
+    );
+  } catch (error) {
+    if ((error as { code?: string }).code === '42P01') {
+      return [];
+    }
+    throw error;
+  }
+}

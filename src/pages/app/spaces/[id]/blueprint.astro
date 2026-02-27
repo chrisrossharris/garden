@@ -11,11 +11,16 @@ if (!appUser) return Astro.redirect('/');
 const id = Astro.params.id as string;
 const space = await getSpace(id, appUser.id);
 if (!space) return Astro.redirect('/app');
+const canPurchaseBlueprint = space.access_role === 'OWNER' || space.access_role === 'EDITOR';
 
-const areas = await listAreas(id);
+const areas = await listAreas(id, appUser.id);
 const purchase = await one<{ status: string; pdf_url: string | null }>(
-  `SELECT status, pdf_url FROM purchases WHERE user_id = $1 AND garden_space_id = $2 ORDER BY created_at DESC LIMIT 1`,
-  [appUser.id, id]
+  `SELECT status, pdf_url
+   FROM purchases
+   WHERE garden_space_id = $1
+   ORDER BY created_at DESC
+   LIMIT 1`,
+  [id]
 );
 ---
 
@@ -27,12 +32,16 @@ const purchase = await one<{ status: string; pdf_url: string | null }>(
       <ul class="space-y-2 text-sm">
         {areas.map((a) => <li>{a.name} · {a.sqft} sqft · {a.sun_exposure}</li>)}
       </ul>
+      {canPurchaseBlueprint ? (
       <button
         class="rounded-md bg-moss-700 px-4 py-2 text-sm text-white"
         onclick={`fetch('/.netlify/functions/create-checkout-session',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({mode:'BLUEPRINT',userId:'${appUser.id}',gardenSpaceId:'${id}'})}).then(r=>r.json()).then(d=>window.location=d.url)`}
       >
         Purchase Blueprint
       </button>
+      ) : (
+        <p class="text-sm text-moss-700">Viewer access cannot purchase or regenerate Blueprints.</p>
+      )}
 
       {purchase?.status === 'completed' && purchase?.pdf_url && (
         <a class="inline-flex rounded-md border border-moss-200 px-3 py-2 text-sm" href={purchase.pdf_url} target="_blank">Download Blueprint PDF</a>

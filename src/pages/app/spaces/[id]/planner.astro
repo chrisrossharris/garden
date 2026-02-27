@@ -3,7 +3,7 @@ import BaseLayout from '@/layouts/BaseLayout.astro';
 import AppShell from '@/components/AppShell.astro';
 import { requireAppUser } from '@/lib/auth';
 import { getSpace, listAreas } from '@/lib/services/spaces';
-import { addPlanting, getPlanForSpace, listLayoutAllocationsForSpace, listPlants } from '@/lib/services/planner';
+import { addPlanting, getPlanForSpace, listAreaLayoutsForSpace, listLayoutAllocationsForSpace, listPlants } from '@/lib/services/planner';
 import { getLocationProfile } from '@/lib/services/location';
 import { analyzeCompanions, suggestedZoneForPlant, suggestedZoneReasonForPlant, type BedZone } from '@/lib/engine/companions';
 import { getWeeklyForecast } from '@/lib/services/weather';
@@ -14,8 +14,10 @@ if (!appUser) return Astro.redirect('/');
 const id = Astro.params.id as string;
 const space = await getSpace(id, appUser.id);
 if (!space) return Astro.redirect('/app');
+const canEditSpace = space.access_role === 'OWNER' || space.access_role === 'EDITOR';
 
 if (Astro.request.method === 'POST') {
+  if (!canEditSpace) return Astro.redirect(`/app/spaces/${id}/planner`);
   const form = await Astro.request.formData();
   await addPlanting({
     areaId: String(form.get('areaId')),
@@ -27,9 +29,10 @@ if (Astro.request.method === 'POST') {
 }
 
 const plants = await listPlants({});
-const areas = await listAreas(id);
+const areas = await listAreas(id, appUser.id);
 const plan = await getPlanForSpace(id);
 const layoutAllocations = await listLayoutAllocationsForSpace(id);
+const savedAreaLayouts = await listAreaLayoutsForSpace(id);
 const profile = await getLocationProfile(space.zip);
 const forecast = await getWeeklyForecast(space.zip);
 
@@ -205,6 +208,21 @@ const categoryColor: Record<string, string> = {
   other: 'bg-zinc-100 text-zinc-700 border-zinc-200'
 };
 
+const savedAreaLayoutById = new Map(savedAreaLayouts.map((r) => [r.area_id, { xPct: Number(r.x_pct), yPct: Number(r.y_pct) }]));
+const areaMapSeed = bedCards.map((bed, index) => {
+  const saved = savedAreaLayoutById.get(bed.id);
+  const defaultX = 8 + (index % 3) * 30;
+  const defaultY = 12 + Math.floor(index / 3) * 22;
+  return {
+    areaId: bed.id,
+    name: bed.name,
+    sun: bed.sun,
+    sqft: bed.sqft,
+    xPct: saved ? Math.max(0, Math.min(95, saved.xPct)) : defaultX,
+    yPct: saved ? Math.max(0, Math.min(95, saved.yPct)) : defaultY
+  };
+});
+
 const companionPairRules = {
   good: [
     ['Tomato', 'Purple Coneflower'],
@@ -241,8 +259,9 @@ const companionPairRules = {
         </label>
         <label class="text-sm">Quantity <input class="mt-1 w-full rounded-md" type="number" min="1" name="quantity" required /></label>
         <label class="text-sm">Notes <input class="mt-1 w-full rounded-md" name="notes" /></label>
-        <button class="btn-primary w-fit rounded-md px-4 py-2 text-sm" type="submit">Add to Bed</button>
+        <button class="btn-primary w-fit rounded-md px-4 py-2 text-sm" type="submit" disabled={!canEditSpace}>Add to Bed</button>
       </form>
+      {!canEditSpace && <p class="text-xs text-moss-600">Viewer access: planning edits are disabled.</p>}
 
       <div class="grid gap-3 rounded-lg border border-moss-100 p-3 md:grid-cols-3">
         <div>
@@ -282,53 +301,41 @@ const companionPairRules = {
 
     <section class="card space-y-4">
       <div>
-        <p class="text-xs uppercase tracking-wide text-moss-600">Bed Footprints</p>
-        <h2 class="mt-1 font-serif text-2xl text-moss-800">Resize beds visually and sync square footage</h2>
-        <p class="mt-1 text-sm text-moss-700">Drag the right handle to adjust width. Save to update sqft and recalculate capacity.</p>
+        <p class="text-xs uppercase tracking-wide text-moss-600">Area Layout Map</p>
+        <h2 class="mt-1 font-serif text-2xl text-moss-800">Arrange beds by real position (north-up)</h2>
+        <p class="mt-1 text-sm text-moss-700">Drag each bed to match your property. Top is North, bottom is South. Square footage stays editable in Area Settings.</p>
       </div>
 
-      <div class="grid gap-3 md:grid-cols-2">
-        {bedCards.map((bed) => (
-          <article
-            class="rounded-lg border border-moss-100 bg-[var(--surface-strong)] p-3"
-            data-bed-footprint
-            data-area-id={bed.id}
-            data-bed-name={bed.name}
-            data-used-sq-inches={bed.usedSqInches}
-            data-sqft={bed.sqft}
-          >
-            <div class="flex items-center justify-between gap-2">
-              <h3 class="font-medium text-moss-800">{bed.name}</h3>
-              <span class="text-xs text-moss-600">{bed.sun.replace('_', ' ')}</span>
-            </div>
-
-            <div class="mt-2 rounded-md border border-moss-100 bg-white/70 p-2 dark:bg-black/10">
-              <div class="relative h-20 rounded border border-moss-100 bg-[var(--surface)]">
-                <div
-                  class="absolute left-1 top-1 bottom-1 rounded border border-moss-300 bg-gradient-to-r from-moss-100 to-moss-200"
-                  data-bed-rect
-                  style={`width:${Math.max(16, Math.min(96, Math.round((Number(bed.sqft) / (Number(bed.sqft) + 6)) * 100)))}%`}
-                >
-                  <button
-                    type="button"
-                    class="absolute -right-1 top-1/2 h-6 w-2 -translate-y-1/2 cursor-ew-resize rounded bg-moss-700/80"
-                    title="Drag to resize"
-                    data-bed-resize
-                  ></button>
-                </div>
+      <div class="rounded-xl border border-moss-100 bg-[var(--surface-strong)] p-3">
+        <div class="mb-2 flex items-center justify-between text-xs text-moss-600">
+          <span class="rounded-full border border-moss-200 px-2 py-0.5">N</span>
+          <span>South</span>
+        </div>
+        <div class="relative h-[28rem] overflow-hidden rounded-lg border border-moss-100 bg-[linear-gradient(to_right,rgba(53,83,63,0.08)_1px,transparent_1px),linear-gradient(to_bottom,rgba(53,83,63,0.08)_1px,transparent_1px)] [background-size:24px_24px]" data-area-map-canvas>
+          {areaMapSeed.map((item) => (
+            <article
+              class="absolute w-44 cursor-grab rounded-lg border border-moss-200 bg-white/95 p-2 shadow-sm active:cursor-grabbing dark:bg-black/20"
+              data-area-node
+              data-area-id={item.areaId}
+              data-x-pct={item.xPct}
+              data-y-pct={item.yPct}
+              style={`left:${item.xPct}%;top:${item.yPct}%`}
+            >
+              <div class="flex items-center justify-between gap-2">
+                <h3 class="text-sm font-medium text-moss-800">{item.name}</h3>
+                <span class="text-[10px] uppercase tracking-wide text-moss-600">{item.sun.replace('_', ' ')}</span>
               </div>
-            </div>
+              <p class="mt-1 text-xs text-moss-700">{item.sqft.toFixed(2)} sqft</p>
+            </article>
+          ))}
+        </div>
+      </div>
 
-            <div class="mt-3 grid gap-2 md:grid-cols-[auto_1fr_auto] md:items-end">
-              <label class="text-xs">
-                Sqft
-                <input data-sqft-input class="mt-1 w-24 rounded-md" type="number" min="0.25" step="0.25" value={bed.sqft} />
-              </label>
-              <p class="text-xs text-moss-700" data-occupancy-live>{bed.occupancyPct}% used · {bed.roomPct}% open</p>
-              <button type="button" class="btn-outline rounded-md px-3 py-1.5 text-xs" data-save-sqft>Save</button>
-            </div>
-          </article>
-        ))}
+      <div class="flex flex-wrap items-center gap-2">
+        <button type="button" class="btn-outline rounded-md px-3 py-1.5 text-xs" data-map-autolayout disabled={!canEditSpace}>Auto layout by sun</button>
+        <button type="button" class="btn-outline rounded-md px-3 py-1.5 text-xs" data-map-reset disabled={!canEditSpace}>Reset layout</button>
+        <button type="button" class="btn-primary rounded-md px-3 py-1.5 text-xs" data-map-save disabled={!canEditSpace}>Save area map</button>
+        {!canEditSpace && <span class="text-xs text-moss-600">Viewer access: map edits are disabled.</span>}
       </div>
     </section>
 
@@ -482,7 +489,7 @@ const companionPairRules = {
       ))}
     </section>
 
-    <script is:inline define:vars={{ id, layoutByArea, zoneGuideByArea, companionPairRules }}>
+    <script is:inline define:vars={{ id, layoutByArea, zoneGuideByArea, companionPairRules, areaMapSeed, canEditSpace }}>
       (() => {
         const spaceId = id;
         const boards = document.querySelectorAll('[data-layout-board]');
@@ -797,96 +804,141 @@ const companionPairRules = {
         });
 
         const clamp = (n, min, max) => Math.max(min, Math.min(max, n));
-        const updateFootprintVisual = (card, sqft) => {
-          const rect = card.querySelector('[data-bed-rect]');
-          const input = card.querySelector('[data-sqft-input]');
-          const occ = card.querySelector('[data-occupancy-live]');
-          if (!(rect instanceof HTMLElement) || !(input instanceof HTMLInputElement) || !(occ instanceof HTMLElement)) return;
-          const pctWidth = clamp(Math.round((sqft / (sqft + 6)) * 100), 16, 96);
-          rect.style.width = `${pctWidth}%`;
-          input.value = String(Math.round(sqft * 100) / 100);
+        const mapCanvas = document.querySelector('[data-area-map-canvas]');
+        const mapSaveBtn = document.querySelector('[data-map-save]');
+        const mapResetBtn = document.querySelector('[data-map-reset]');
+        const mapAutoBtn = document.querySelector('[data-map-autolayout]');
+        const mapStorageKey = `garden-area-map:${spaceId}`;
 
-          const usedSqInches = Number(card.getAttribute('data-used-sq-inches') || '0');
-          const totalSqInches = sqft * 144;
-          const usedPct = totalSqInches > 0 ? clamp(Math.round((usedSqInches / totalSqInches) * 100), 0, 999) : 0;
-          const openPct = clamp(100 - usedPct, 0, 100);
-          occ.textContent = `${usedPct}% used · ${openPct}% open`;
+        const readMapState = () => {
+          try {
+            const raw = localStorage.getItem(mapStorageKey);
+            if (!raw) return areaMapSeed;
+            const parsed = JSON.parse(raw);
+            if (!Array.isArray(parsed)) return areaMapSeed;
+            return parsed;
+          } catch {
+            return areaMapSeed;
+          }
+        };
+        const writeMapState = (state) => localStorage.setItem(mapStorageKey, JSON.stringify(state));
+
+        const applyMapState = (state) => {
+          if (!(mapCanvas instanceof HTMLElement)) return;
+          mapCanvas.querySelectorAll('[data-area-node]').forEach((node) => {
+            const areaId = node.getAttribute('data-area-id');
+            const item = state.find((s) => s.areaId === areaId);
+            if (!item) return;
+            const x = clamp(Number(item.xPct) || 0, 0, 95);
+            const y = clamp(Number(item.yPct) || 0, 0, 95);
+            node.setAttribute('data-x-pct', String(x));
+            node.setAttribute('data-y-pct', String(y));
+            node.style.left = `${x}%`;
+            node.style.top = `${y}%`;
+          });
         };
 
-        document.querySelectorAll('[data-bed-footprint]').forEach((card) => {
-          const areaId = card.getAttribute('data-area-id');
-          const resizeHandle = card.querySelector('[data-bed-resize]');
-          const input = card.querySelector('[data-sqft-input]');
-          const saveBtn = card.querySelector('[data-save-sqft]');
-          if (!areaId || !(resizeHandle instanceof HTMLElement) || !(input instanceof HTMLInputElement) || !(saveBtn instanceof HTMLButtonElement)) return;
+        let mapState = readMapState();
+        applyMapState(mapState);
 
-          let dragState = null;
-          const startDrag = (clientX) => {
-            dragState = {
-              startX: clientX,
-              startSqft: Number(input.value || card.getAttribute('data-sqft') || '1')
+        if (canEditSpace && mapCanvas instanceof HTMLElement) {
+          const startDragNode = (node, clientX, clientY) => {
+            const rect = mapCanvas.getBoundingClientRect();
+            const nodeRect = node.getBoundingClientRect();
+            const offsetX = clientX - nodeRect.left;
+            const offsetY = clientY - nodeRect.top;
+
+            const onMove = (x, y) => {
+              const nextLeft = clamp(x - rect.left - offsetX, 0, rect.width - nodeRect.width);
+              const nextTop = clamp(y - rect.top - offsetY, 0, rect.height - nodeRect.height);
+              const xPct = (nextLeft / Math.max(1, rect.width - nodeRect.width)) * 95;
+              const yPct = (nextTop / Math.max(1, rect.height - nodeRect.height)) * 95;
+              node.style.left = `${xPct}%`;
+              node.style.top = `${yPct}%`;
+              node.setAttribute('data-x-pct', String(Math.round(xPct * 100) / 100));
+              node.setAttribute('data-y-pct', String(Math.round(yPct * 100) / 100));
             };
+
+            const onMouseMove = (e) => onMove(e.clientX, e.clientY);
+            const onMouseUp = () => {
+              window.removeEventListener('mousemove', onMouseMove);
+              window.removeEventListener('mouseup', onMouseUp);
+              const areaId = node.getAttribute('data-area-id');
+              if (!areaId) return;
+              mapState = mapState.map((item) =>
+                item.areaId === areaId
+                  ? {
+                      ...item,
+                      xPct: Number(node.getAttribute('data-x-pct') || item.xPct),
+                      yPct: Number(node.getAttribute('data-y-pct') || item.yPct)
+                    }
+                  : item
+              );
+              writeMapState(mapState);
+            };
+
+            window.addEventListener('mousemove', onMouseMove);
+            window.addEventListener('mouseup', onMouseUp);
           };
-          const moveDrag = (clientX) => {
-            if (!dragState) return;
-            const dx = clientX - dragState.startX;
-            const widthFeetDelta = dx / 18;
-            const baseWidthFeet = dragState.startSqft / 4;
-            const nextWidthFeet = clamp(baseWidthFeet + widthFeetDelta, 0.25, 80);
-            const nextSqft = Math.round(nextWidthFeet * 4 * 4) / 4;
-            updateFootprintVisual(card, nextSqft);
-          };
-          const endDrag = () => {
-            dragState = null;
-            document.body.classList.remove('select-none');
-          };
 
-          resizeHandle.addEventListener('mousedown', (e) => {
-            e.preventDefault();
-            startDrag(e.clientX);
-            document.body.classList.add('select-none');
+          mapCanvas.querySelectorAll('[data-area-node]').forEach((node) => {
+            node.addEventListener('mousedown', (e) => {
+              e.preventDefault();
+              startDragNode(node, e.clientX, e.clientY);
+            });
           });
-          window.addEventListener('mousemove', (e) => moveDrag(e.clientX));
-          window.addEventListener('mouseup', endDrag);
+        }
 
-          resizeHandle.addEventListener('touchstart', (e) => {
-            if (e.touches.length === 0) return;
-            startDrag(e.touches[0].clientX);
-          }, { passive: true });
-          window.addEventListener('touchmove', (e) => {
-            if (e.touches.length === 0) return;
-            moveDrag(e.touches[0].clientX);
-          }, { passive: true });
-          window.addEventListener('touchend', endDrag);
-
-          input.addEventListener('input', () => {
-            const sqft = clamp(Number(input.value || '1'), 0.25, 20000);
-            updateFootprintVisual(card, sqft);
+        mapAutoBtn?.addEventListener('click', () => {
+          if (!canEditSpace) return;
+          const sorted = [...mapState].sort((a, b) => {
+            const rank = (sun) => (sun === 'full_sun' ? 2 : sun === 'part_sun' ? 1 : 0);
+            return rank(b.sun) - rank(a.sun);
           });
+          mapState = sorted.map((item, idx) => ({
+            ...item,
+            xPct: 8 + (idx % 3) * 30,
+            yPct: 10 + Math.floor(idx / 3) * 22
+          }));
+          writeMapState(mapState);
+          applyMapState(mapState);
+        });
 
-          saveBtn.addEventListener('click', async () => {
-            const sqft = clamp(Number(input.value || '1'), 0.25, 20000);
-            saveBtn.disabled = true;
-            const oldText = saveBtn.textContent;
-            saveBtn.textContent = 'Saving...';
-            try {
-              const res = await fetch(`/api/spaces/${spaceId}/areas/${areaId}`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ sqft })
-              });
-              if (!res.ok) throw new Error(await res.text());
-              card.setAttribute('data-sqft', String(sqft));
-              saveBtn.textContent = 'Saved';
-              setTimeout(() => {
-                saveBtn.textContent = oldText || 'Save';
-                window.location.reload();
-              }, 450);
-            } catch {
-              saveBtn.textContent = 'Retry save';
-              saveBtn.disabled = false;
-            }
-          });
+        mapResetBtn?.addEventListener('click', () => {
+          if (!canEditSpace) return;
+          mapState = areaMapSeed;
+          writeMapState(mapState);
+          applyMapState(mapState);
+        });
+
+        mapSaveBtn?.addEventListener('click', async () => {
+          if (!canEditSpace) return;
+          if (!(mapSaveBtn instanceof HTMLButtonElement)) return;
+          mapSaveBtn.disabled = true;
+          const oldText = mapSaveBtn.textContent;
+          mapSaveBtn.textContent = 'Saving...';
+          try {
+            const res = await fetch(`/api/spaces/${spaceId}/layout`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                areaLayouts: mapState.map((item) => ({
+                  areaId: item.areaId,
+                  xPct: item.xPct,
+                  yPct: item.yPct
+                }))
+              })
+            });
+            if (!res.ok) throw new Error(await res.text());
+            mapSaveBtn.textContent = 'Saved';
+            setTimeout(() => {
+              mapSaveBtn.textContent = oldText || 'Save area map';
+              mapSaveBtn.disabled = false;
+            }, 700);
+          } catch {
+            mapSaveBtn.textContent = 'Retry save';
+            mapSaveBtn.disabled = false;
+          }
         });
 
         boards.forEach((board) => attachBoard(board));
